@@ -1,0 +1,13 @@
+[package]
+name = "confine"
+version = "0.1.0"
+authors = ["David Hou <david.hou314@gmail.com>"]
+
+[dependencies]
+bitflags = "0.7.0"
+enum_primitive = "0.1.0"
+lazy_static = "0.2.1"
+libc = "0.2"
+nix = "0.7.0"
+ptrace = { git = "https://github.com/chaosagent/rust-ptrace", rev = "f736d64" }
+syscall = "0.2.1"
