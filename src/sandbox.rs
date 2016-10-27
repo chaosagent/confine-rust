@@ -27,11 +27,13 @@ impl<'a, 'b> Sandbox<'a, 'b> {
 
     pub fn start(&mut self) -> Result<(), ErrCode> {
         match unistd::fork() {
-            Ok(result) => match result {
+            Ok(fork_result) => match fork_result {
                 unistd::ForkResult::Parent { child } => {
                     println!("pid: {}", child);
                     self.child_pid = child;
-                    self.monitor()
+                    let result = self.monitor();
+                    self.print_usage_statistics();
+                    result
                 },
                 unistd::ForkResult::Child => {
                     let result = self.start_program();
@@ -81,9 +83,6 @@ impl<'a, 'b> Sandbox<'a, 'b> {
             }
             ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
         }
-        let usage = get_children_rusage().expect("Could not get usage statistics!");
-        println!("User Time: {}.{:06}s", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
-        println!("System Time: {}.{:06}s", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
         result
     }
 
@@ -118,6 +117,12 @@ impl<'a, 'b> Sandbox<'a, 'b> {
             Ok(_) => Ok(()),
             Err(code) => Err(code)
         }
+    }
+
+    fn print_usage_statistics(&self) {
+        let usage = get_children_rusage().expect("Could not get usage statistics!");
+        println!("User Time: {}.{:06}s", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
+        println!("System Time: {}.{:06}s", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
     }
 }
 
