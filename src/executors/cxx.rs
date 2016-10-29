@@ -32,22 +32,11 @@ impl Executor for CXXExecutor {
 }
 
 pub struct CXXSyscallHandler {
-    seen_execve: bool,
 }
 
 impl CXXSyscallHandler {
     pub fn new() -> CXXSyscallHandler {
         CXXSyscallHandler {
-            seen_execve: false,
-        }
-    }
-
-    fn handle_execve_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        if self.seen_execve {
-            Err(ErrCode::IllegalSyscall(syscall.call))
-        } else {
-            self.seen_execve = true;
-            Ok(OkCode::Ok)
         }
     }
 }
@@ -55,7 +44,6 @@ impl CXXSyscallHandler {
 impl SyscallHandler for CXXSyscallHandler {
     fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
-            nr::EXECVE => self.handle_execve_entry(&syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
