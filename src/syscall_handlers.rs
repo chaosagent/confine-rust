@@ -68,3 +68,47 @@ pub fn get_default_execve_entry_handler() -> Box<FnMut(&ptrace::Syscall) -> Resu
         }
     }
 }
+
+pub struct RWHandler {
+    max_total_write: usize,
+    written: usize,
+}
+
+impl RWHandler {
+    pub fn new(max_total_write: usize) -> RWHandler {
+        RWHandler {
+            max_total_write: max_total_write,
+            written: 0,
+        }
+    }
+
+    // Does NOT update written if an Err is returned.
+    fn handle_write(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        let new_written = self.written + syscall.args[2];
+
+        // Check for overflow too
+        if new_written < self.written || new_written > self.max_total_write {
+            Err(ErrCode::IllegalWrite)
+        } else {
+            self.written = new_written;
+            Ok(OkCode::Ok)
+        }
+    }
+}
+
+impl SyscallHandler for RWHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize] {
+        static SYSCALL_WHITELIST: [usize; 2] = [
+            nr::READ,
+            nr::WRITE,
+        ];
+        &SYSCALL_WHITELIST
+    }
+
+    fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        match syscall.call {
+            nr::WRITE => self.handle_write(syscall),
+            _ => Ok(OkCode::Passthrough)
+        }
+    }
+}
