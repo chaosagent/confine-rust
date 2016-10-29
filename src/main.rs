@@ -18,7 +18,7 @@ fn main() {
     let executor = executor_factory(&[String::from("/bin/cat"), String::from("/tmp/lol")]);
     let syscall_handler_factory = executors::get_syscall_handler("cxx").expect("Invalid executor!");
     let mut syscall_handler = syscall_handler_factory();
-    let mut handlers: [&mut syscall_handlers::SyscallHandler; 1] = [&mut syscall_handler];
-    let mut sandbox = sandbox::Sandbox::new(&executor, &mut handlers);
+    let mut handlers: Vec<Box<syscall_handlers::SyscallHandler>> = vec![box syscall_handler];
+    let mut sandbox = sandbox::Sandbox::new(box executor, handlers);
     println!("{:?}", sandbox.start());
 }

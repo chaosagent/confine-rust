@@ -10,14 +10,14 @@ use syscall_handlers::ErrCode;
 use syscall_handlers::OkCode;
 use syscall_handlers::SyscallHandler;
 
-pub struct Sandbox<'a, 'b> {
-    executor: &'a executors::Executor,
-    syscall_handlers: &'b mut ([&'b mut SyscallHandler]),
+pub struct Sandbox {
+    executor: Box<executors::Executor>,
+    syscall_handlers: Vec<Box<SyscallHandler>>,
     child_pid: libc::c_int,
 }
 
-impl<'a, 'b> Sandbox<'a, 'b> {
-    pub fn new(executor: &'a executors::Executor, syscall_handlers: &'b mut [&'b mut SyscallHandler]) -> Sandbox<'a, 'b> {
+impl Sandbox {
+    pub fn new(executor: Box<executors::Executor>, syscall_handlers: Vec<Box<SyscallHandler>>) -> Sandbox {
         Sandbox {
             executor: executor,
             syscall_handlers: syscall_handlers,
@@ -101,7 +101,7 @@ impl<'a, 'b> Sandbox<'a, 'b> {
     fn process_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<(), ErrCode> {
         println!("Syscall entry: {:?}", syscall);
         
-        let entry_handler_result_fold = |prev: Result<OkCode, ErrCode>, mut handler: &mut &mut SyscallHandler| {
+        let entry_handler_result_fold = |prev: Result<OkCode, ErrCode>, mut handler: &mut Box<SyscallHandler>| {
             if prev.is_err() || prev.unwrap() == OkCode::Break {
                 prev
             } else {
