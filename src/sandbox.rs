@@ -6,9 +6,12 @@ use nix::sys::wait;
 use nix::unistd;
 use ptrace;
 use std::mem;
+use syscall::nr;
 use syscall_handlers::ErrCode;
 use syscall_handlers::OkCode;
 use syscall_handlers::SyscallHandler;
+
+const NOP_SYSCALL: usize = 1024;  // Random invalid syscall number to cancel syscall
 
 pub struct Sandbox {
     executor: Box<executors::Executor>,
@@ -48,8 +51,55 @@ impl Sandbox {
     }
 
     // TODO: Don't panic in the monitor; process errors instead.
+    // TODO: Handle non-PTRACE_EVENT sources of SIGTRAPs, distinguishing with PTRACE_O_TRACESYSGOOD.
     fn monitor(&mut self) -> Result<(), ErrCode> {
         let mut result = Ok(());
+        let mut in_syscall = false;  // TODO: Handle PTRACE_EVENTs interrupting syscalls
+
+        // Wait for initial SIGSTOP after PTRACE_TRACEME and set options.
+        {
+            let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
+            if let wait::WaitStatus::Stopped(_, sig) = status {
+                if sig == signal::Signal::SIGSTOP {
+                    println!("Got initial SIGSTOP, commencing with execution.");
+                    ptrace::setoptions(self.child_pid, ptrace::PTRACE_O_EXITKILL).expect("Failed to set ptrace options!");
+                    ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
+                } else {
+                    self.kill_program();
+                    return Err(ErrCode::InternalError);
+                }
+            } else {
+                self.kill_program();
+                return Err(ErrCode::InternalError);
+            }
+        }
+
+        // Intercept and cancel RT_SIGPROCMASK from signal::raise
+        loop {
+            let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
+            if let wait::WaitStatus::Stopped(_, sig) = status {
+                if sig == signal::Signal::SIGTRAP {
+                    let mut syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
+                    if syscall.call != nr::RT_SIGPROCMASK && syscall.call != NOP_SYSCALL {
+                        self.kill_program().expect("Failed to kill child!");
+                        return Err(ErrCode::InternalError);
+                    }
+
+                    if !in_syscall {
+                        syscall.call = NOP_SYSCALL;
+                        syscall.write().expect("Failed to overwrite syscall!");
+
+                        in_syscall = true;
+                        ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
+                    } else {
+                        in_syscall = false;
+                        ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
+                        break;
+                    }
+                }
+            }
+        }
+
         loop {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
             println!("{:?}", status);
@@ -64,16 +114,21 @@ impl Sandbox {
                     break;
                 }
                 wait::WaitStatus::Stopped(_, sig) => {
-                    match sig as i32 {
-                        5 => {
+                    match sig {
+                        signal::Signal::SIGTRAP => {
                             let syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
-                            match self.process_syscall_entry(&syscall) {
-                                Err(code) => {
-                                    result = Err(code);
-                                    self.kill_program().expect("Failed to kill child!");
-                                    break;
-                                },
-                                _ => ()
+                            if !in_syscall {
+                                match self.process_syscall_entry(&syscall) {
+                                    Err(code) => {
+                                        result = Err(code);
+                                        self.kill_program().expect("Failed to kill child!");
+                                        break;
+                                    },
+                                    _ => ()
+                                }
+                                in_syscall = true;
+                            } else {
+                                in_syscall = false;
                             }
                         },
                         _ => ()
@@ -88,6 +143,7 @@ impl Sandbox {
 
     fn start_program(&self) -> Result<(), ()> {
         ptrace::traceme().expect("Failed to traceme!");
+        signal::raise(signal::SIGSTOP).expect("Failed to raise SIGSTOP!");
         self.executor.execute()
     }
 
