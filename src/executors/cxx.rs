@@ -42,6 +42,12 @@ impl CXXSyscallHandler {
 }
 
 impl SyscallHandler for CXXSyscallHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize] {
+        static SYSCALL_WHITELIST: [usize; 0] = [
+        ];
+        &SYSCALL_WHITELIST
+    }
+
     fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)

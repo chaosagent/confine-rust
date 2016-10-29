@@ -24,6 +24,7 @@ pub enum ErrCode {
 // TODO: implement syscall exit handling.
 // TODO: support syscall modification
 pub trait SyscallHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize];
     fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode>;
 }
 
@@ -41,6 +42,13 @@ impl DefaultHandler {
 }
 
 impl SyscallHandler for DefaultHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize] {
+        static SYSCALL_WHITELIST: [usize; 1] = [
+            nr::EXECVE,
+        ];
+        &SYSCALL_WHITELIST
+    }
+
     fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::EXECVE => (self.execve_entry_handler)(syscall),

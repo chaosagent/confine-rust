@@ -100,6 +100,13 @@ impl Sandbox {
 
     fn process_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<(), ErrCode> {
         println!("Syscall entry: {:?}", syscall);
+
+        if !self.syscall_handlers.iter()
+            .map(|handler| handler.get_syscall_whitelist())
+            .map(|whitelist| whitelist.contains(&syscall.call))
+            .any(|x| x) {
+            return Err(ErrCode::IllegalSyscall(syscall.call))
+        }
         
         let entry_handler_result_fold = |prev: Result<OkCode, ErrCode>, mut handler: &mut Box<SyscallHandler>| {
             if prev.is_err() || prev.unwrap() == OkCode::Break {
@@ -113,7 +120,6 @@ impl Sandbox {
         };
 
         match self.syscall_handlers.iter_mut().fold(Ok(OkCode::Passthrough) as Result<OkCode, ErrCode>, entry_handler_result_fold) {
-            Ok(OkCode::Passthrough) => Err(ErrCode::IllegalSyscall(syscall.call)),
             Ok(_) => Ok(()),
             Err(code) => Err(code)
         }
