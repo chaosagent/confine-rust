@@ -43,8 +43,9 @@ impl DefaultHandler {
 
 impl SyscallHandler for DefaultHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 1] = [
+        static SYSCALL_WHITELIST: [usize; 2] = [
             nr::EXECVE,
+            nr::EXIT_GROUP,
         ];
         &SYSCALL_WHITELIST
     }
@@ -111,4 +112,107 @@ impl SyscallHandler for RWHandler {
             _ => Ok(OkCode::Passthrough)
         }
     }
+}
+
+pub struct FDHandler;
+
+impl FDHandler {
+    pub fn new() -> FDHandler {
+        FDHandler {}
+    }
+}
+
+impl SyscallHandler for FDHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize] {
+        static SYSCALL_WHITELIST: [usize; 14] = [
+            nr::CLOSE,
+            nr::FSTAT,
+            nr::POLL,
+            nr::LSEEK,
+            nr::PREAD64,
+            nr::PWRITE64,
+            nr::READV,
+            nr::WRITEV,
+            nr::PIPE,
+            nr::SELECT,
+            nr::DUP,
+            nr::DUP2,
+
+            nr::DUP3,
+            nr::PIPE2,
+        ];
+        &SYSCALL_WHITELIST
+    }
+
+    fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        match syscall.call {
+            _ => Ok(OkCode::Passthrough)
+        }
+    }
+}
+
+pub struct MemoryHandler;
+
+impl MemoryHandler {
+    pub fn new() -> MemoryHandler {
+        MemoryHandler {}
+    }
+}
+
+impl SyscallHandler for MemoryHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize] {
+        static SYSCALL_WHITELIST: [usize; 7] = [
+            nr::MMAP,
+            nr::MPROTECT,
+            nr::MUNMAP,
+            nr::BRK,
+            nr::MREMAP,
+            nr::MSYNC,
+            nr::ARCH_PRCTL,
+        ];
+        &SYSCALL_WHITELIST
+    }
+
+    fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        match syscall.call {
+            _ => Ok(OkCode::Passthrough)
+        }
+    }
+
+}
+
+pub struct FilesystemHandler;
+
+impl FilesystemHandler {
+    pub fn new() -> FilesystemHandler {
+        FilesystemHandler {}
+    }
+
+    // TODO: implement file access filtering.
+    fn handle_open(&self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        Ok(OkCode::Ok)
+    }
+
+    fn handle_access(&self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        Ok(OkCode::Ok)
+    }
+}
+
+impl SyscallHandler for FilesystemHandler {
+    fn get_syscall_whitelist(&self) -> &'static [usize] {
+        static SYSCALL_WHITELIST: [usize; 2] = [
+            nr::OPEN,
+            nr::ACCESS,
+        ];
+        &SYSCALL_WHITELIST
+    }
+
+    fn handle_syscall_entry(&mut self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        match syscall.call {
+            nr::OPEN => self.handle_open(syscall),
+            nr::ACCESS => self.handle_access(syscall),
+            _ => Ok(OkCode::Passthrough)
+        }
+    }
+
 }
