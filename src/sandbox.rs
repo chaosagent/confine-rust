@@ -141,12 +141,6 @@ impl Sandbox {
         result
     }
 
-    fn start_program(&self) -> Result<(), ()> {
-        ptrace::traceme().expect("Failed to traceme!");
-        signal::raise(signal::SIGSTOP).expect("Failed to raise SIGSTOP!");
-        self.executor.execute()
-    }
-
     fn kill_program(&self) -> Result<(), ()> {
         match signal::kill(self.child_pid, signal::SIGKILL) {
             Ok(_) => Ok(()),
@@ -185,6 +179,14 @@ impl Sandbox {
         let usage = get_children_rusage().expect("Could not get usage statistics!");
         println!("User Time: {}.{:06}s", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
         println!("System Time: {}.{:06}s", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
+    }
+}
+
+impl Sandbox {
+    fn start_program(&self) -> Result<(), ()> {
+        ptrace::traceme().expect("Failed to traceme!");
+        signal::raise(signal::SIGSTOP).expect("Failed to raise SIGSTOP!");
+        self.executor.execute()
     }
 }
 
