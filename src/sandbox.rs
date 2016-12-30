@@ -159,8 +159,7 @@ impl Sandbox {
 
         if !self.syscall_handlers.iter()
             .map(|handler| handler.get_syscall_whitelist())
-            .map(|whitelist| whitelist.contains(&syscall.call))
-            .any(|x| x) {
+            .any(|whitelist| whitelist.contains(&syscall.call)) {
             return Err(ErrCode::IllegalSyscall(syscall.call))
         }
         
