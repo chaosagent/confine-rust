@@ -5,6 +5,7 @@ use nix::sys::signal;
 use nix::sys::wait;
 use nix::unistd;
 use ptrace;
+use rlimits;
 use std::mem;
 use syscall::nr;
 use syscall_handlers::ErrCode;
@@ -17,14 +18,19 @@ pub struct Sandbox {
     executor: Box<executors::Executor>,
     syscall_handlers: Vec<Box<SyscallHandler>>,
     child_pid: libc::c_int,
+
+    rlimits: Vec<rlimits::RLimit64>,
 }
 
 impl Sandbox {
-    pub fn new(executor: Box<executors::Executor>, syscall_handlers: Vec<Box<SyscallHandler>>) -> Sandbox {
+    pub fn new(executor: Box<executors::Executor>, syscall_handlers: Vec<Box<SyscallHandler>>,
+               rlimits: Vec<rlimits::RLimit64>) -> Sandbox {
         Sandbox {
             executor: executor,
             syscall_handlers: syscall_handlers,
             child_pid: -1,
+
+            rlimits: rlimits,
         }
     }
 
@@ -60,35 +66,32 @@ impl Sandbox {
         {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
             if let wait::WaitStatus::Stopped(_, sig) = status {
-                if sig == signal::Signal::SIGSTOP {
+                if let signal::Signal::SIGSTOP = sig {
                     println!("Got initial SIGSTOP, commencing with execution.");
                     ptrace::setoptions(self.child_pid, ptrace::PTRACE_O_EXITKILL).expect("Failed to set ptrace options!");
                     ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
                 } else {
-                    self.kill_program();
+                    self.kill_program().expect("Failed to kill child!");
                     return Err(ErrCode::InternalError);
                 }
             } else {
-                self.kill_program();
+                self.kill_program().expect("Failed to kill child!");
                 return Err(ErrCode::InternalError);
             }
         }
 
-        // Intercept and cancel RT_SIGPROCMASK from signal::raise
+        // Ignore RT_SIGPROCMASK from signal::raise
         loop {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
             if let wait::WaitStatus::Stopped(_, sig) = status {
-                if sig == signal::Signal::SIGTRAP {
-                    let mut syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
+                if let signal::Signal::SIGTRAP = sig {
+                    let syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
                     if syscall.call != nr::RT_SIGPROCMASK && syscall.call != NOP_SYSCALL {
                         self.kill_program().expect("Failed to kill child!");
                         return Err(ErrCode::InternalError);
                     }
 
                     if !in_syscall {
-                        syscall.call = NOP_SYSCALL;
-                        syscall.write().expect("Failed to overwrite syscall!");
-
                         in_syscall = true;
                         ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
                     } else {
@@ -96,7 +99,13 @@ impl Sandbox {
                         ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
                         break;
                     }
+                } else {
+                    self.kill_program().expect("Failed to kill child!");
+                    return Err(ErrCode::InternalError);
                 }
+            } else {
+                self.kill_program().expect("Failed to kill child!");
+                return Err(ErrCode::InternalError);
             }
         }
 
@@ -108,7 +117,7 @@ impl Sandbox {
                     println!("Exited with code {}", code);
                     break;
                 },
-                wait::WaitStatus::Signaled(_, signal, dumped_core) => {
+                wait::WaitStatus::Signaled(_, signal, _) => {
                     println!("Received signal {}", signal as i32);
                     self.kill_program().expect("Failed to kill child!");  // TODO: Process inbound signals
                     break;
@@ -118,19 +127,37 @@ impl Sandbox {
                         signal::Signal::SIGTRAP => {
                             let syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
                             if !in_syscall {
-                                match self.process_syscall_entry(&syscall) {
-                                    Err(code) => {
-                                        result = Err(code);
+                                // Syscall entries always have a return_val of -ENOSYS
+                                if syscall.return_val == -libc::ENOSYS as isize {
+                                    match self.process_syscall_entry(&syscall) {
+                                        Err(code) => {
+                                            result = Err(code);
+                                            self.kill_program().expect("Failed to kill child!");
+                                            break;
+                                        },
+                                        _ => ()
+                                    }
+                                    in_syscall = true;
+                                } else {
+                                    // This can happen if a syscall exit notifies both a parent and a child in execve
+                                    if syscall.call != nr::EXECVE {
+                                        println!("Syscall entry without return_val of -ENOSYS detected, and is not execve!");
+                                        result = Err(ErrCode::InternalError);
                                         self.kill_program().expect("Failed to kill child!");
                                         break;
-                                    },
-                                    _ => ()
+                                    }
+                                    // If it is execve, we're OK
                                 }
-                                in_syscall = true;
                             } else {
+                                println!("Syscall exit: {:?}", syscall);
                                 in_syscall = false;
                             }
                         },
+                        signal::Signal::SIGXCPU => {
+                            result = Err(ErrCode::TimeLimitExceeded);
+                            self.kill_program().expect("Failed to kill child!");
+                            break;
+                        }
                         _ => ()
                     }
                 },
@@ -175,6 +202,7 @@ impl Sandbox {
         }
     }
 
+    // TODO: Measure rusage before killing child process to allow for measurement of killed children
     fn print_usage_statistics(&self) {
         let usage = get_children_rusage().expect("Could not get usage statistics!");
         println!("User Time: {}.{:06}s", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
@@ -184,9 +212,18 @@ impl Sandbox {
 
 impl Sandbox {
     fn start_program(&self) -> Result<(), ()> {
+        self.set_rlimits().expect("Failed to set rlimits!");
+
         ptrace::traceme().expect("Failed to traceme!");
         signal::raise(signal::SIGSTOP).expect("Failed to raise SIGSTOP!");
         self.executor.execute()
+    }
+
+    fn set_rlimits(&self) -> Result<(), ()> {
+        self.rlimits.iter()
+            .map(|rlimit| rlimit.set())
+            .fold(Ok(()), |prev, result| prev.and(result))
+            .map_err(drop)
     }
 }
 

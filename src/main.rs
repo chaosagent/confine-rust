@@ -8,10 +8,9 @@ extern crate ptrace;
 #[macro_use] extern crate syscall;
 
 mod executors;
+mod rlimits;
 mod sandbox;
 mod syscall_handlers;
-
-use std::ffi::CString;
 
 fn main() {
     let executor_factory = executors::get_executor("cxx").expect("Invalid executor!");
@@ -31,6 +30,9 @@ fn main() {
         fs_handler,
         default_syscall_handler,
     ];
-    let mut sandbox = sandbox::Sandbox::new(box executor, handlers);
+    let rlimits: Vec<rlimits::RLimit64> = vec![
+        rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_CPU, 1),
+    ];
+    let mut sandbox = sandbox::Sandbox::new(box executor, handlers, rlimits);
     println!("{:?}", sandbox.start());
 }

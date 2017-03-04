@@ -8,6 +8,7 @@ pub enum OkCode {
     Passthrough,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrCode {
     InternalError,
@@ -189,11 +190,11 @@ impl FilesystemHandler {
     }
 
     // TODO: implement file access filtering.
-    fn handle_open(&self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_open(&self, _: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
         Ok(OkCode::Ok)
     }
 
-    fn handle_access(&self, syscall: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_access(&self, _: &ptrace::Syscall) -> Result<OkCode, ErrCode> {
         Ok(OkCode::Ok)
     }
 }
