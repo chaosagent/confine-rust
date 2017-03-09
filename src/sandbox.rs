@@ -90,39 +90,6 @@ impl Sandbox {
             }
         }
 
-        // Ignore RT_SIGPROCMASK from signal::raise
-        loop {
-            let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
-            println!("{:?}", status);
-            if let wait::WaitStatus::Stopped(pid, sig) = status {
-                assert_eq!(pid, self.child_pid);
-                if let signal::Signal::SIGTRAP = sig {
-                    let syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
-                    if syscall.call != nr::RT_SIGPROCMASK && syscall.call != NOP_SYSCALL {
-                        // Assume raise won't call RT_SIGPROCMASK
-                        // TODO: make more robust
-                        break;
-                    }
-
-                    let process = self.children.get_mut(&pid).unwrap();
-                    if !process.in_syscall {
-                        process.in_syscall = true;
-                        ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
-                    } else {
-                        process.in_syscall = false;
-                        ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
-                        break;
-                    }
-                } else {
-                    self.kill_program().expect("Failed to kill child!");
-                    return Err(ErrCode::InternalError);
-                }
-            } else {
-                self.kill_program().expect("Failed to kill child!");
-                return Err(ErrCode::InternalError);
-            }
-        }
-
         loop {
             let status = wait::waitpid(-1, None).expect("Failed to wait");
             println!("{:?}", status);
