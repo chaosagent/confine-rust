@@ -22,7 +22,7 @@ fn main() {
         String::from("/usr/bin/java"),
         String::from("-XX:-UsePerfData"),
         String::from("-cp"),
-        String::from("/home/david/tmp"),
+        String::from("/tmp"),
         String::from("lol")
     ]);
     let rw_handler = box syscall_handlers::RWHandler::new(!0);
@@ -31,9 +31,15 @@ fn main() {
     let mut fs_handler = box syscall_handlers::FilesystemHandler::new_with_default_rules();
     fs_handler.allow_files(vec![
         b".hotspotrc".to_vec(),
+        b".hotspot_compiler".to_vec(),
+        b"/etc/nsswitch.conf".to_vec(),
+        b"/etc/passwd".to_vec(),
+        b"/tmp".to_vec(),
     ].into_iter());
     fs_handler.allow_prefixes(vec![
-        b"/etc/java-8-openjdk/amd64".to_vec(),
+        b"/etc/java-7-openjdk/amd64".to_vec(),
+        b"/tmp/.java_pid".to_vec(),
+        b"/tmp/".to_vec(),
     ].into_iter());
     let signals_handler = box syscall_handlers::SignalsHandler::new();
     let threading_handler = box syscall_handlers::ThreadingHandler::new();
