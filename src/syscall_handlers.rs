@@ -3,7 +3,11 @@ use fnv::FnvHashSet;
 use libc;
 use process::ProcessController;
 use ptrace;
+use std::cmp::min;
+use std::ffi::OsStr;
+use std::fs;
 use std::iter::Iterator;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use syscall::nr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,9 +242,13 @@ impl FilesystemHandler {
         handler.allow_files(vec![
             b"/etc/ld.so.cache".to_vec(),
             b"/etc/ld.so.preload".to_vec(),
+            b"/usr".to_vec(),
+            b"/sys/devices/system/cpu".to_vec(),
         ].into_iter());
         handler.allow_prefixes(vec![
-            b"/usr/lib".to_vec(),
+            b"/proc/".to_vec(),
+            b"/usr/".to_vec(),
+            b"/sys/devices/system/cpu/".to_vec(),
         ].into_iter());
         handler
     }
@@ -265,13 +273,21 @@ impl FilesystemHandler {
         }
     }
 
-    fn is_allowed(&self, filename: Vec<u8>) -> bool {
-        if self.allowed_files.contains(&filename) {
+    // TODO: account for working directory if working directory of child process is ever changed.
+    fn is_allowed(&self, filename: &[u8]) -> bool {
+        let canonical_filename: Vec<u8> = match fs::canonicalize(&OsStr::from_bytes(filename)) {
+            Ok(buf) => buf.into_os_string().into_vec(),
+            _ => filename.to_vec()
+        };
+
+        println!("Canonicalized filename: {}", String::from_utf8_lossy(canonical_filename.as_slice()));
+
+        if self.allowed_files.contains(&canonical_filename) {
             return true;
         }
 
         if self.allowed_prefixes.iter().any(|prefix: &Vec<u8>| {
-            prefix.as_slice() == &filename[..prefix.len()]
+            prefix.as_slice() == &canonical_filename[..min(canonical_filename.len(), prefix.len())]
         }) {
             return true;
         }
@@ -284,7 +300,7 @@ impl FilesystemHandler {
         println!("open called for {}", String::from_utf8_lossy(filename.as_slice()));
 
         let readonly_flag = syscall.args[1] & 3 == libc::O_RDONLY as usize;
-        if !self.is_allowed(filename) || !readonly_flag {
+        if !self.is_allowed(filename.as_slice()) || !readonly_flag {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -295,7 +311,7 @@ impl FilesystemHandler {
         let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
         println!("stat called for {}", String::from_utf8_lossy(filename.as_slice()));
 
-        if !self.is_allowed(filename) {
+        if !self.is_allowed(filename.as_slice()) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -306,7 +322,7 @@ impl FilesystemHandler {
         let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
         println!("lstat called for {}", String::from_utf8_lossy(filename.as_slice()));
 
-        if !self.is_allowed(filename) {
+        if !self.is_allowed(filename.as_slice()) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -317,7 +333,7 @@ impl FilesystemHandler {
         let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
         println!("access called for {}", String::from_utf8_lossy(filename.as_slice()));
 
-        if !self.is_allowed(filename) {
+        if !self.is_allowed(filename.as_slice()) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -333,7 +349,7 @@ impl FilesystemHandler {
         let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
         println!("readlink called for {}", String::from_utf8_lossy(filename.as_slice()));
 
-        if !self.is_allowed(filename) {
+        if !self.is_allowed(filename.as_slice()) && filename.as_slice() != b"/proc/self/exe" {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
