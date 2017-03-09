@@ -151,11 +151,12 @@ impl FDHandler {
 
 impl SyscallHandler for FDHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 19] = [
+        static SYSCALL_WHITELIST: [usize; 20] = [
             nr::CLOSE,
             nr::FSTAT,
             nr::POLL,
             nr::LSEEK,
+            nr::IOCTL,
             nr::PREAD64,
             nr::PWRITE64,
             nr::READV,
@@ -569,9 +570,11 @@ impl UserInfoHandler {
 
 impl SyscallHandler for UserInfoHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 2] = [
+        static SYSCALL_WHITELIST: [usize; 4] = [
             nr::GETUID,
             nr::GETEUID,
+            nr::GETGID,
+            nr::GETEGID,
         ];
         &SYSCALL_WHITELIST
     }
