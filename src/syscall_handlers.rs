@@ -331,6 +331,8 @@ impl FilesystemHandler {
 
     fn handle_readlink_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
+        println!("readlink called for {}", String::from_utf8_lossy(filename.as_slice()));
+
         if !self.is_allowed(filename) {
             Err(ErrCode::IllegalOpen)
         } else {
