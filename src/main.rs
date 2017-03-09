@@ -29,7 +29,6 @@ fn main() {
     let fd_handler = box syscall_handlers::FDHandler::new();
     let memory_handler = box syscall_handlers::MemoryHandler::new();
     let mut fs_handler = box syscall_handlers::FilesystemHandler::new_with_default_rules();
-    fs_handler.allow_file(b"/tmp/loll".to_vec());
     let signals_handler = box syscall_handlers::SignalsHandler::new();
     let threading_handler = box syscall_handlers::ThreadingHandler::new();
     let scheduling_handler = box syscall_handlers::SchedulingHandler::new();
