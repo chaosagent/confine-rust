@@ -402,10 +402,11 @@ impl SignalsHandler {
 
 impl SyscallHandler for SignalsHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 3] = [
+        static SYSCALL_WHITELIST: [usize; 4] = [
             nr::RT_SIGACTION,
             nr::RT_SIGPROCMASK,
             nr::KILL,
+            nr::SIGALTSTACK,
         ];
         &SYSCALL_WHITELIST
     }
@@ -415,6 +416,7 @@ impl SyscallHandler for SignalsHandler {
             nr::RT_SIGACTION => nop_syscall(syscall),
             nr::RT_SIGPROCMASK => nop_syscall(syscall),
             nr::KILL => nop_syscall(syscall),
+            nr::SIGALTSTACK => nop_syscall(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
