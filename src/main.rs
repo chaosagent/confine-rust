@@ -15,11 +15,16 @@ mod process;
 mod sandbox;
 mod syscall_handlers;
 
+use executors::execve::ExecveExecutor;
+
 fn main() {
-    let executor_factory = executors::get_executor("cxx").expect("Invalid executor!");
-    let executor = executor_factory(&[String::from("/usr/bin/java"), String::from("-XX:-UsePerfData"), String::from("-cp"), String::from("/home/david/tmp"), String::from("lol")]);
-    let syscall_handler_factory = executors::get_syscall_handler("cxx").expect("Invalid executor!");
-    let syscall_handler = box syscall_handler_factory();
+    let executor = ExecveExecutor::new(&[
+        String::from("/usr/bin/java"),
+        String::from("-XX:-UsePerfData"),
+        String::from("-cp"),
+        String::from("/home/david/tmp"),
+        String::from("lol")
+    ]);
     let rw_handler = box syscall_handlers::RWHandler::new(!0);
     let fd_handler = box syscall_handlers::FDHandler::new();
     let memory_handler = box syscall_handlers::MemoryHandler::new();
@@ -35,7 +40,6 @@ fn main() {
     let misc_handler = box syscall_handlers::MiscHandler::new();
     let default_syscall_handler = box syscall_handlers::DefaultHandler::new();
     let handlers: Vec<Box<syscall_handlers::SyscallHandler>> = vec![
-        syscall_handler,
         rw_handler,
         fd_handler,
         memory_handler,
