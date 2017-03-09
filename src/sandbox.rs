@@ -6,6 +6,7 @@ use nix::errno;
 use nix::sys::signal;
 use nix::sys::wait;
 use nix::unistd;
+use process::{Process, ProcessController};
 use ptrace;
 use rlimits;
 use std::collections::HashMap;
@@ -144,6 +145,11 @@ impl Sandbox {
                                 break;
                             }
                         },
+                        signal::Signal::SIGSEGV => {
+                            result = Err(ErrCode::RuntimeError);
+                            self.kill_program().expect("Failed to kill child!");
+                            break;
+                        }
                         signal::Signal::SIGXCPU => {
                             result = Err(ErrCode::TimeLimitExceeded);
                             self.kill_program().expect("Failed to kill child!");
@@ -180,26 +186,27 @@ impl Sandbox {
 
     fn process_syscall(&mut self, pid: libc::pid_t) -> Result <(), ErrCode> {
         let mut syscall = ptrace::Syscall::from_pid(pid).expect("Failed to get syscall");
-        let in_syscall = {
-            if !self.children.contains_key(&pid) {
-                self.children.insert(pid, Process::new(pid));
-            }
+        if !self.children.contains_key(&pid) {
+            self.children.insert(pid, Process::new(pid));
+        }
+
+        let (in_syscall, controller) = {
             let process = self.children.get(&pid).unwrap();
-            process.in_syscall
+            (process.in_syscall, process.get_controller())
         };
+
         if !in_syscall {
             println!("Syscall entry for pid {}: {:?}", pid, syscall);
 
             // Syscall entries always have a return_val of -ENOSYS
             if syscall.return_val == -libc::ENOSYS as isize {
-                match self.process_syscall_entry(&mut syscall) {
+                match self.process_syscall_entry(&controller, &mut syscall) {
                     Err(code) => {
                         return Err(code);
                     },
                     _ => ()
                 }
-                let process = self.children.get_mut(&pid).unwrap();
-                process.in_syscall = true;
+                self.children.get_mut(&pid).unwrap().in_syscall = true;
             } else {
                 // This can happen if a syscall exit notifies both a parent and a child in execve
                 if syscall.call != nr::EXECVE {
@@ -211,20 +218,19 @@ impl Sandbox {
         } else {
             println!("Syscall exit for pid {}: {:?}", pid, syscall);
 
-            match self.process_syscall_exit(&mut syscall) {
+            match self.process_syscall_exit(&controller, &mut syscall) {
                 Err(code) => {
                     return Err(code);
                 },
                 _ => ()
             }
 
-            let process = self.children.get_mut(&pid).unwrap();
-            process.in_syscall = false;
+            self.children.get_mut(&pid).unwrap().in_syscall = false;
         }
         Ok(())
     }
 
-    fn process_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<(), ErrCode> {
+    fn process_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<(), ErrCode> {
         if !self.syscall_handlers.iter()
             .map(|handler| handler.get_syscall_whitelist())
             .map(|whitelist| whitelist.contains(&syscall.call))
@@ -236,7 +242,7 @@ impl Sandbox {
             if prev.is_err() || prev.unwrap() == OkCode::Break {
                 prev
             } else {
-                match handler.handle_syscall_entry(syscall) {
+                match handler.handle_syscall_entry(process, syscall) {
                     Ok(OkCode::Passthrough) => prev,
                     x => x
                 }
@@ -249,7 +255,7 @@ impl Sandbox {
         }
     }
 
-    fn process_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<(), ErrCode> {
+    fn process_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<(), ErrCode> {
         if !self.syscall_handlers.iter()
             .map(|handler| handler.get_syscall_whitelist())
             .map(|whitelist| whitelist.contains(&syscall.call))
@@ -263,7 +269,7 @@ impl Sandbox {
             if prev.is_err() || prev.unwrap() == OkCode::Break {
                 prev
             } else {
-                match handler.handle_syscall_exit(syscall) {
+                match handler.handle_syscall_exit(process, syscall) {
                     Ok(OkCode::Passthrough) => prev,
                     x => x
                 }
@@ -324,19 +330,5 @@ pub fn get_pid_from_wait_status(wait_status: wait::WaitStatus) -> Option<libc::p
         wait::WaitStatus::PtraceEvent(pid, _, _) => Some(pid),
         wait::WaitStatus::Continued(pid) => Some(pid),
         wait::WaitStatus::StillAlive => None,
-    }
-}
-
-struct Process {
-    pid: libc::pid_t,
-    in_syscall: bool,
-}
-
-impl Process {
-    fn new(pid: libc::pid_t) -> Process {
-        Process {
-            pid: pid,
-            in_syscall: false,
-        }
     }
 }

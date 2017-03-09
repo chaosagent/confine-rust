@@ -11,6 +11,7 @@ extern crate ptrace;
 mod constants;
 mod executors;
 mod rlimits;
+mod process;
 mod sandbox;
 mod syscall_handlers;
 
@@ -22,7 +23,8 @@ fn main() {
     let rw_handler = box syscall_handlers::RWHandler::new(!0);
     let fd_handler = box syscall_handlers::FDHandler::new();
     let memory_handler = box syscall_handlers::MemoryHandler::new();
-    let fs_handler = box syscall_handlers::FilesystemHandler::new();
+    let mut fs_handler = box syscall_handlers::FilesystemHandler::new_with_default_rules();
+    fs_handler.allow_file(b"/tmp/loll".to_vec());
     let signals_handler = box syscall_handlers::SignalsHandler::new();
     let threading_handler = box syscall_handlers::ThreadingHandler::new();
     let scheduling_handler = box syscall_handlers::SchedulingHandler::new();

@@ -1,6 +1,9 @@
 use constants::NOP_SYSCALL;
+use fnv::FnvHashSet;
 use libc;
+use process::ProcessController;
 use ptrace;
+use std::iter::Iterator;
 use syscall::nr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +18,7 @@ pub enum OkCode {
 pub enum ErrCode {
     InternalError,
 
+    RuntimeError,
     IllegalSyscall(usize),
     IllegalRead,
     IllegalWrite,
@@ -28,8 +32,8 @@ pub enum ErrCode {
 // TODO: support syscall modification
 pub trait SyscallHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize];
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode>;
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode>;
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode>;
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode>;
 }
 
 pub struct DefaultHandler {
@@ -56,14 +60,14 @@ impl SyscallHandler for DefaultHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::EXECVE => (self.execve_entry_handler)(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             NOP_SYSCALL => set_return_val(syscall, 0), // TODO: Track individual nopped syscalls
             _ => Ok(OkCode::Passthrough)
@@ -119,14 +123,14 @@ impl SyscallHandler for RWHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::WRITE => self.handle_write(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -143,7 +147,7 @@ impl FDHandler {
 
 impl SyscallHandler for FDHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 18] = [
+        static SYSCALL_WHITELIST: [usize; 19] = [
             nr::CLOSE,
             nr::FSTAT,
             nr::POLL,
@@ -160,19 +164,20 @@ impl SyscallHandler for FDHandler {
             nr::FTRUNCATE,
             nr::GETDENTS,
             nr::GETDENTS64,
+            nr::FADVISE64,
             nr::DUP3,
             nr::PIPE2,
         ];
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -202,49 +207,135 @@ impl SyscallHandler for MemoryHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 }
 
-pub struct FilesystemHandler;
+pub struct FilesystemHandler {
+    allowed_files: FnvHashSet<Vec<u8>>,
+    allowed_prefixes: FnvHashSet<Vec<u8>>,
+}
 
 impl FilesystemHandler {
     pub fn new() -> FilesystemHandler {
-        FilesystemHandler {}
+        FilesystemHandler {
+            allowed_files: FnvHashSet::default(),
+            allowed_prefixes: FnvHashSet::default(),
+        }
     }
 
-    // TODO: implement file access filtering.
-    fn handle_open_entry(&self, _: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    pub fn new_with_default_rules() -> FilesystemHandler {
+        let mut handler = FilesystemHandler::new();
+        handler.allow_files(vec![
+            b"/etc/ld.so.cache".to_vec(),
+            b"/etc/ld.so.preload".to_vec(),
+        ].into_iter());
+        handler.allow_prefixes(vec![
+            b"/usr/lib".to_vec(),
+        ].into_iter());
+        handler
+    }
+
+    pub fn allow_file(&mut self, filename: Vec<u8>) {
+        self.allowed_files.insert(filename);
+    }
+
+    pub fn allow_files<T>(&mut self, files: T) where T: Iterator<Item=Vec<u8>> {
+        for filename in files {
+            self.allowed_files.insert(filename);
+        }
+    }
+
+    pub fn allow_prefix(&mut self, prefix: Vec<u8>) {
+        self.allowed_prefixes.insert(prefix);
+    }
+
+    pub fn allow_prefixes<T>(&mut self, prefixes: T) where T: Iterator<Item=Vec<u8>> {
+        for prefix in prefixes {
+            self.allowed_prefixes.insert(prefix);
+        }
+    }
+
+    fn is_allowed(&self, filename: Vec<u8>) -> bool {
+        if self.allowed_files.contains(&filename) {
+            return true;
+        }
+
+        if self.allowed_prefixes.iter().any(|prefix: &Vec<u8>| {
+            prefix.as_slice() == &filename[..prefix.len()]
+        }) {
+            return true;
+        }
+
+        return false;
+    }
+
+    fn handle_open_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
+        println!("open called for {}", String::from_utf8_lossy(filename.as_slice()));
+
+        let readonly_flag = syscall.args[1] & 3 == libc::O_RDONLY as usize;
+        if !self.is_allowed(filename) || !readonly_flag {
+            Err(ErrCode::IllegalOpen)
+        } else {
+            Ok(OkCode::Ok)
+        }
+    }
+
+    fn handle_stat_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
+        println!("stat called for {}", String::from_utf8_lossy(filename.as_slice()));
+
+        if !self.is_allowed(filename) {
+            Err(ErrCode::IllegalOpen)
+        } else {
+            Ok(OkCode::Ok)
+        }
+    }
+
+    fn handle_lstat_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
+        println!("lstat called for {}", String::from_utf8_lossy(filename.as_slice()));
+
+        if !self.is_allowed(filename) {
+            Err(ErrCode::IllegalOpen)
+        } else {
+            Ok(OkCode::Ok)
+        }
+    }
+
+    fn handle_access_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
+        println!("access called for {}", String::from_utf8_lossy(filename.as_slice()));
+
+        if !self.is_allowed(filename) {
+            Err(ErrCode::IllegalOpen)
+        } else {
+            Ok(OkCode::Ok)
+        }
+    }
+
+    // TODO: Handle getcwd
+    fn handle_getcwd_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         Ok(OkCode::Ok)
     }
 
-    fn handle_stat_entry(&self, _: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        Ok(OkCode::Ok)
-    }
-
-    fn handle_lstat_entry(&self, _: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        Ok(OkCode::Ok)
-    }
-
-    fn handle_access_entry(&self, _: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        Ok(OkCode::Ok)
-    }
-
-    fn handle_getcwd_entry(&self, _: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        Ok(OkCode::Ok)
-    }
-
-    fn handle_readlink_entry(&self, _: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        Ok(OkCode::Ok)
+    fn handle_readlink_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
+        if !self.is_allowed(filename) {
+            Err(ErrCode::IllegalOpen)
+        } else {
+            Ok(OkCode::Ok)
+        }
     }
 }
 
@@ -261,19 +352,19 @@ impl SyscallHandler for FilesystemHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
-            nr::OPEN => self.handle_open_entry(syscall),
-            nr::STAT => self.handle_stat_entry(syscall),
-            nr::LSTAT => self.handle_lstat_entry(syscall),
-            nr::ACCESS => self.handle_access_entry(syscall),
-            nr::GETCWD => self.handle_getcwd_entry(syscall),
-            nr::READLINK => self.handle_readlink_entry(syscall),
+            nr::OPEN => self.handle_open_entry(process, syscall),
+            nr::STAT => self.handle_stat_entry(process, syscall),
+            nr::LSTAT => self.handle_lstat_entry(process, syscall),
+            nr::ACCESS => self.handle_access_entry(process, syscall),
+            nr::GETCWD => self.handle_getcwd_entry(process, syscall),
+            nr::READLINK => self.handle_readlink_entry(process, syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -298,7 +389,7 @@ impl SyscallHandler for SignalsHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::RT_SIGACTION => nop_syscall(syscall),
             nr::RT_SIGPROCMASK => nop_syscall(syscall),
@@ -307,7 +398,7 @@ impl SyscallHandler for SignalsHandler {
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -322,7 +413,7 @@ impl ThreadingHandler {
     }
 
     // TODO: handle other kinds of clones
-    fn handle_clone_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_clone_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         if syscall.args[0] & libc::CLONE_THREAD as usize != 0 {
             Ok(OkCode::Ok)
         } else {
@@ -344,14 +435,14 @@ impl SyscallHandler for ThreadingHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
-            nr::CLONE => self.handle_clone_entry(syscall),
+            nr::CLONE => self.handle_clone_entry(process, syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -375,13 +466,13 @@ impl SyscallHandler for SchedulingHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -405,14 +496,14 @@ impl SyscallHandler for RLimitsHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::SETRLIMIT => nop_syscall(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -435,13 +526,13 @@ impl SyscallHandler for ClockHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -465,14 +556,14 @@ impl SyscallHandler for UserInfoHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 
     // TODO: maybe clear output on return?
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -497,14 +588,14 @@ impl SyscallHandler for SocketHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::SYSINFO => nop_syscall(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
@@ -528,14 +619,14 @@ impl SyscallHandler for MiscHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             nr::SYSINFO => nop_syscall(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }

@@ -7,5 +7,5 @@ authors = ["David Hou <david.hou314@gmail.com>"]
 libc = "0.2.21"
 fnv = "1.0.5"
 nix = { git = "https://github.com/chaosagent/nix", rev = "34acfdd" }
-ptrace = { git = "https://github.com/chaosagent/rust-ptrace", rev = "f02084b" }
+ptrace = { git = "https://github.com/chaosagent/rust-ptrace", rev = "1e75a88" }
 syscall = "0.2.1"

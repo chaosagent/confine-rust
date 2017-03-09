@@ -6,6 +6,7 @@ use std::vec::Vec;
 use syscall::nr;
 
 use executors::Executor;
+use process::ProcessController;
 use syscall_handlers::ErrCode;
 use syscall_handlers::OkCode;
 use syscall_handlers::SyscallHandler;
@@ -48,13 +49,13 @@ impl SyscallHandler for CXXSyscallHandler {
         &SYSCALL_WHITELIST
     }
 
-    fn handle_syscall_entry(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
     }
 
-    fn handle_syscall_exit(&mut self, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
             _ => Ok(OkCode::Passthrough)
         }
