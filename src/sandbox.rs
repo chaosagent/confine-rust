@@ -1,4 +1,4 @@
-use constants::NOP_SYSCALL;
+use constants::*;
 use executors;
 use fnv::FnvHashMap;
 use libc;
@@ -11,6 +11,7 @@ use ptrace;
 use rlimits;
 use std::collections::HashMap;
 use std::mem;
+use std::os::unix::io::{IntoRawFd, RawFd};
 use syscall::nr;
 use syscall_handlers::ErrCode;
 use syscall_handlers::OkCode;
@@ -25,6 +26,10 @@ pub struct Sandbox {
 
     // TODO: Handle PTRACE_EVENTs interrupting syscalls
     children: FnvHashMap<libc::pid_t, Process>,
+
+    stdin_fd: Option<RawFd>,
+    stdout_fd: Option<RawFd>,
+    stderr_fd: Option<RawFd>,
 }
 
 impl Sandbox {
@@ -38,7 +43,24 @@ impl Sandbox {
             rlimits: rlimits,
 
             children: FnvHashMap::default(),
+
+            stdin_fd: None,
+            stdout_fd: None,
+            stderr_fd: None,
+
         }
+    }
+
+    pub fn stdin_redirect<T>(&mut self, fd: T) where T: IntoRawFd {
+        self.stdin_fd = Some(fd.into_raw_fd());
+    }
+
+    pub fn stdout_redirect<T>(&mut self, fd: T) where T: IntoRawFd {
+        self.stdout_fd = Some(fd.into_raw_fd());
+    }
+
+    pub fn stderr_redirect<T>(&mut self, fd: T) where T: IntoRawFd {
+        self.stderr_fd = Some(fd.into_raw_fd());
     }
 
     pub fn start(&mut self) -> Result<(), ErrCode> {
@@ -267,6 +289,7 @@ impl Sandbox {
 impl Sandbox {
     fn start_program(&self) -> Result<(), ()> {
         self.set_rlimits().expect("Failed to set rlimits!");
+        self.redirect_stdio().expect("Failed to redirect stdio!");
 
         ptrace::traceme().expect("Failed to traceme!");
         signal::raise(signal::SIGSTOP).expect("Failed to raise SIGSTOP!");
@@ -278,6 +301,19 @@ impl Sandbox {
             .map(|rlimit| rlimit.set())
             .fold(Ok(()), |prev, result| prev.and(result))
             .map_err(drop)
+    }
+
+    fn redirect_stdio(&self) -> Result<(), ()> {
+        if let Some(stdin_fd) = self.stdin_fd {
+            unistd::dup2(stdin_fd, STDIN).map_err(drop)?;
+        }
+        if let Some(stdout_fd) = self.stdout_fd {
+            unistd::dup2(stdout_fd, STDOUT).map_err(drop)?;
+        }
+        if let Some(stderr_fd) = self.stderr_fd {
+            unistd::dup2(stderr_fd, STDERR).map_err(drop)?;
+        }
+        Ok(())
     }
 }
 
