@@ -242,10 +242,12 @@ impl FilesystemHandler {
         handler.allow_files(vec![
             b"/etc/ld.so.cache".to_vec(),
             b"/etc/ld.so.preload".to_vec(),
+            b"/etc/ld.so.nohwcap".to_vec(),
             b"/usr".to_vec(),
             b"/sys/devices/system/cpu".to_vec(),
         ].into_iter());
         handler.allow_prefixes(vec![
+            b"/lib/".to_vec(),
             b"/proc/".to_vec(),
             b"/usr/".to_vec(),
             b"/sys/devices/system/cpu/".to_vec(),
