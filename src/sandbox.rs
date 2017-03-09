@@ -99,8 +99,9 @@ impl Sandbox {
                 if let signal::Signal::SIGTRAP = sig {
                     let syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
                     if syscall.call != nr::RT_SIGPROCMASK && syscall.call != NOP_SYSCALL {
-                        self.kill_program().expect("Failed to kill child!");
-                        return Err(ErrCode::InternalError);
+                        // Assume raise won't call RT_SIGPROCMASK
+                        // TODO: make more robust
+                        break;
                     }
 
                     let process = self.children.get_mut(&pid).unwrap();
