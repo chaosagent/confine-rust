@@ -377,12 +377,13 @@ impl FilesystemHandler {
 
 impl SyscallHandler for FilesystemHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 6] = [
+        static SYSCALL_WHITELIST: [usize; 7] = [
             nr::OPEN,
             nr::STAT,
             nr::LSTAT,
             nr::ACCESS,
             nr::GETCWD,
+            nr::FCHDIR,
             nr::READLINK,
         ];
         &SYSCALL_WHITELIST
@@ -395,6 +396,7 @@ impl SyscallHandler for FilesystemHandler {
             nr::LSTAT => self.handle_lstat_entry(process, syscall),
             nr::ACCESS => self.handle_access_entry(process, syscall),
             nr::GETCWD => self.handle_getcwd_entry(process, syscall),
+            nr::FCHDIR => nop_syscall(syscall),
             nr::READLINK => self.handle_readlink_entry(process, syscall),
             _ => Ok(OkCode::Passthrough)
         }
@@ -402,6 +404,7 @@ impl SyscallHandler for FilesystemHandler {
 
     fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
+            nr::FCHDIR => set_return_val(syscall, 0),
             _ => Ok(OkCode::Passthrough)
         }
     }

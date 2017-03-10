@@ -12,5 +12,6 @@
     "/etc/java-8-openjdk/",
     "/tmp/.java_pid",
     "/tmp/"
-  ]
+  ],
+  "stdout_file": "/tmp/lolll"
 }

@@ -19,6 +19,8 @@ mod syscall_handlers;
 
 use executors::Executor;
 use executors::execve::ExecveExecutor;
+use std::env;
+use std::os::unix::io::AsRawFd;
 use std::fs::File;
 
 #[derive(Serialize, Deserialize)]
@@ -28,6 +30,10 @@ struct SandboxConfig {
 
     allowed_files: Option<Vec<String>>,
     allowed_prefixes: Option<Vec<String>>,
+
+    stdin_file: Option<String>,
+    stdout_file: Option<String>,
+    stderr_file: Option<String>,
 }
 
 impl SandboxConfig {
@@ -66,6 +72,16 @@ impl SandboxConfig {
         if let Some(limit) = self.memory_limit {
             sandbox.add_rlimit(rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_AS, limit));
         }
+
+        if let Some(ref stdin_file) = self.stdin_file {
+            sandbox.stdin_redirect(File::open(stdin_file).expect("Cannot open stdin file!"));
+        }
+        if let Some(ref stdout_file) = self.stdout_file {
+            sandbox.stdout_redirect(File::create(stdout_file).expect("Cannot open stdout file!"));
+        }
+        if let Some(ref stderr_file) = self.stderr_file {
+            sandbox.stderr_redirect(File::create(stderr_file).expect("Cannot open stderr file!"));
+        }
     }
 }
 
@@ -80,6 +96,8 @@ fn main() {
         String::from("/tmp"),
         String::from("lol")
     ]);
+    let args: Vec<String> = env::args().collect();
+    let executor = ExecveExecutor::new(&args[1..]);
     let mut sandbox = sandbox_config.get_sandbox(executor);
     println!("{:?}", sandbox.start());
 }
