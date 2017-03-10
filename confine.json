@@ -1,6 +1,5 @@
 {
-  "cputime_limit": 1,
-  "memory_limit": 2560000000,
+  "cputime_limit": 2,
   "allowed_files": [
     ".hotspotrc",
     ".hotspot_compiler",
@@ -9,7 +8,7 @@
     "/tmp"
   ],
   "allowed_prefixes": [
-    "/etc/java-8-openjdk/",
+    "/etc/java-7-openjdk/",
     "/tmp/.java_pid",
     "/tmp/"
   ],

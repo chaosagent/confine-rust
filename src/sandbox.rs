@@ -214,7 +214,7 @@ impl Sandbox {
         }
     }
 
-    fn process_syscall(&mut self, pid: libc::pid_t) -> Result <(), ErrCode> {
+    fn process_syscall(&mut self, pid: libc::pid_t) -> Result<(), ErrCode> {
         let mut syscall = ptrace::Syscall::from_pid(pid).expect("Failed to get syscall");
         if !self.children.contains_key(&pid) {
             self.children.insert(pid, Process::new(pid));

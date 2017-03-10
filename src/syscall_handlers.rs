@@ -55,11 +55,12 @@ impl DefaultHandler {
 
 impl SyscallHandler for DefaultHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 4] = [
+        static SYSCALL_WHITELIST: [usize; 5] = [
             nr::EXECVE,
             nr::EXIT,
             nr::EXIT_GROUP,
             NOP_SYSCALL,
+            NOP_SYSCALL + 1,
         ];
         &SYSCALL_WHITELIST
     }
@@ -377,13 +378,14 @@ impl FilesystemHandler {
 
 impl SyscallHandler for FilesystemHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 7] = [
+        static SYSCALL_WHITELIST: [usize; 8] = [
             nr::OPEN,
             nr::STAT,
             nr::LSTAT,
             nr::ACCESS,
             nr::GETCWD,
             nr::FCHDIR,
+            nr::UNLINK,
             nr::READLINK,
         ];
         &SYSCALL_WHITELIST
@@ -397,6 +399,7 @@ impl SyscallHandler for FilesystemHandler {
             nr::ACCESS => self.handle_access_entry(process, syscall),
             nr::GETCWD => self.handle_getcwd_entry(process, syscall),
             nr::FCHDIR => nop_syscall(syscall),
+            nr::UNLINK => nop_syscall(syscall),
             nr::READLINK => self.handle_readlink_entry(process, syscall),
             _ => Ok(OkCode::Passthrough)
         }
@@ -404,7 +407,6 @@ impl SyscallHandler for FilesystemHandler {
 
     fn handle_syscall_exit(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
-            nr::FCHDIR => set_return_val(syscall, 0),
             _ => Ok(OkCode::Passthrough)
         }
     }
@@ -633,7 +635,8 @@ impl SyscallHandler for SocketHandler {
 
     fn handle_syscall_entry(&mut self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
         match syscall.call {
-            nr::SYSINFO => nop_syscall(syscall),
+            nr::SOCKET => nop_syscall_no_return(syscall),
+            nr::CONNECT => nop_syscall_no_return(syscall),
             _ => Ok(OkCode::Passthrough)
         }
     }
@@ -678,6 +681,12 @@ impl SyscallHandler for MiscHandler {
 
 fn nop_syscall(syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
     syscall.call = NOP_SYSCALL;
+    syscall.write();
+    Ok(OkCode::Ok)
+}
+
+fn nop_syscall_no_return(syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
+    syscall.call = NOP_SYSCALL + 1;
     syscall.write();
     Ok(OkCode::Ok)
 }

@@ -70,7 +70,7 @@ impl SandboxConfig {
             sandbox.add_rlimit(rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_CPU, limit));
         }
         if let Some(limit) = self.memory_limit {
-            sandbox.add_rlimit(rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_AS, limit));
+            sandbox.add_rlimit(rlimits::RLimit64::new(rlimits::Resource::RLIMIT_AS, limit, limit));
         }
 
         if let Some(ref stdin_file) = self.stdin_file {
@@ -89,17 +89,22 @@ fn main() {
     let config_file: File = File::open("confine.json").expect("Could not find confine.json!");
     let sandbox_config: SandboxConfig = serde_json::from_reader(config_file).expect("Failed to deserialize config!");
 
-    let executor = ExecveExecutor::new(&[
-        String::from("/usr/bin/java"),
-        String::from("-XX:-UsePerfData"),
-        String::from("-cp"),
-        String::from("/tmp"),
-        String::from("lol")
-    ]);
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         panic!("No command specified!");
     }
+
+    /*let executor = ExecveExecutor::new(&[
+        String::from("/usr/bin/java"),
+        String::from("-XX:-UsePerfData"),
+        String::from("-XX:+DisableAttachMechanism"),
+        String::from("-Xmx256m"),
+        String::from("-Xrs"),
+        String::from("-cp"),
+        String::from("/tmp"),
+        String::from("lol")
+    ]);*/
+
     let executor = ExecveExecutor::new(&args[1..]);
     let mut sandbox = sandbox_config.get_sandbox(executor);
     println!("{:?}", sandbox.start());
