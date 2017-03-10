@@ -37,6 +37,20 @@ struct SandboxConfig {
 }
 
 impl SandboxConfig {
+    pub fn new() -> SandboxConfig {
+        SandboxConfig {
+            cputime_limit: None,
+            memory_limit: None,
+
+            allowed_files: None,
+            allowed_prefixes: None,
+
+            stdin_file: None,
+            stdout_file: None,
+            stderr_file: None,
+        }
+    }
+
     pub fn get_sandbox<T>(&self, executor: T) -> sandbox::Sandbox where T: Executor + 'static {
         let mut sandbox = sandbox::Sandbox::new(box executor);
         self.apply(&mut sandbox);
@@ -86,8 +100,10 @@ impl SandboxConfig {
 }
 
 fn main() {
-    let config_file: File = File::open("confine.json").expect("Could not find confine.json!");
-    let sandbox_config: SandboxConfig = serde_json::from_reader(config_file).expect("Failed to deserialize config!");
+    let sandbox_config: SandboxConfig = match File::open("confine.json") {
+        Ok(config_file) => serde_json::from_reader(config_file).expect("Failed to deserialize config!"),
+        _ => SandboxConfig::new()
+    };
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
