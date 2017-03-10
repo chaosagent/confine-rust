@@ -8,4 +8,7 @@ libc = "0.2.21"
 fnv = "1.0.5"
 nix = { git = "https://github.com/chaosagent/nix", rev = "34acfdd" }
 ptrace = { git = "https://github.com/chaosagent/rust-ptrace", rev = "1e75a88" }
+serde = "0.9"
+serde_derive = "0.9"
+serde_json = "0.9"
 syscall = "0.2.1"

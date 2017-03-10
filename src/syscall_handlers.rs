@@ -4,7 +4,7 @@ use libc;
 use process::ProcessController;
 use ptrace;
 use std::cmp::min;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::iter::Iterator;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -226,8 +226,8 @@ impl SyscallHandler for MemoryHandler {
 }
 
 pub struct FilesystemHandler {
-    allowed_files: FnvHashSet<Vec<u8>>,
-    allowed_prefixes: FnvHashSet<Vec<u8>>,
+    allowed_files: FnvHashSet<OsString>,
+    allowed_prefixes: FnvHashSet<OsString>,
 }
 
 impl FilesystemHandler {
@@ -241,56 +241,56 @@ impl FilesystemHandler {
     pub fn new_with_default_rules() -> FilesystemHandler {
         let mut handler = FilesystemHandler::new();
         handler.allow_files(vec![
-            b"/etc/ld.so.cache".to_vec(),
-            b"/etc/ld.so.preload".to_vec(),
-            b"/etc/ld.so.nohwcap".to_vec(),
-            b"/usr".to_vec(),
-            b"/sys/devices/system/cpu".to_vec(),
+            "/etc/ld.so.cache",
+            "/etc/ld.so.preload",
+            "/etc/ld.so.nohwcap",
+            "/usr",
+            "/sys/devices/system/cpu",
         ].into_iter());
         handler.allow_prefixes(vec![
-            b"/lib/".to_vec(),
-            b"/proc/".to_vec(),
-            b"/usr/".to_vec(),
-            b"/sys/devices/system/cpu/".to_vec(),
+            "/lib/",
+            "/proc/",
+            "/usr/",
+            "/sys/devices/system/cpu/",
         ].into_iter());
         handler
     }
 
-    pub fn allow_file(&mut self, filename: Vec<u8>) {
-        self.allowed_files.insert(filename);
+    pub fn allow_file<T>(&mut self, filename: T) where T: Into<OsString> {
+        self.allowed_files.insert(filename.into());
     }
 
-    pub fn allow_files<T>(&mut self, files: T) where T: Iterator<Item=Vec<u8>> {
+    pub fn allow_files<T, U>(&mut self, files: T) where T: Iterator<Item=U>, U: Into<OsString> {
         for filename in files {
-            self.allowed_files.insert(filename);
+            self.allowed_files.insert(filename.into());
         }
     }
 
-    pub fn allow_prefix(&mut self, prefix: Vec<u8>) {
-        self.allowed_prefixes.insert(prefix);
+    pub fn allow_prefix<T>(&mut self, prefix: T) where T: Into<OsString> {
+        self.allowed_prefixes.insert(prefix.into());
     }
 
-    pub fn allow_prefixes<T>(&mut self, prefixes: T) where T: Iterator<Item=Vec<u8>> {
+    pub fn allow_prefixes<T, U>(&mut self, prefixes: T) where T: Iterator<Item=U>, U: Into<OsString> {
         for prefix in prefixes {
-            self.allowed_prefixes.insert(prefix);
+            self.allowed_prefixes.insert(prefix.into());
         }
     }
 
     // TODO: account for working directory if working directory of child process is ever changed.
-    fn is_allowed(&self, filename: &[u8]) -> bool {
-        let canonical_filename: Vec<u8> = match fs::canonicalize(&OsStr::from_bytes(filename)) {
-            Ok(buf) => buf.into_os_string().into_vec(),
-            _ => filename.to_vec()
+    fn is_allowed(&self, filename: &OsStr) -> bool {
+        let canonical_filename: OsString = match fs::canonicalize(&OsStr::from_bytes(filename.as_bytes())) {
+            Ok(buf) => buf.into_os_string(),
+            _ => filename.to_os_string()
         };
 
-        println!("Canonicalized filename: {}", String::from_utf8_lossy(canonical_filename.as_slice()));
+        println!("Canonicalized filename: {}", canonical_filename.to_string_lossy());
 
         if self.allowed_files.contains(&canonical_filename) {
             return true;
         }
 
-        if self.allowed_prefixes.iter().any(|prefix: &Vec<u8>| {
-            prefix.as_slice() == &canonical_filename[..min(canonical_filename.len(), prefix.len())]
+        if self.allowed_prefixes.iter().any(|prefix: &OsString| {
+            prefix.as_os_str().as_bytes() == &canonical_filename.as_os_str().as_bytes()[0..min(canonical_filename.len(), prefix.len())]
         }) {
             return true;
         }
@@ -299,11 +299,14 @@ impl FilesystemHandler {
     }
 
     fn handle_open_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
-        println!("open called for {}", String::from_utf8_lossy(filename.as_slice()));
+        let filename_vec: Vec<u8> = process.get_reader()
+            .read_string(syscall.args[0], libc::PATH_MAX as usize)
+            .expect("Could not read filename from memory!");
+        let filename: OsString = OsString::from_vec(filename_vec);
+        println!("open called for {}", filename.to_string_lossy());
 
         let readonly_flag = syscall.args[1] & 3 == libc::O_RDONLY as usize;
-        if !self.is_allowed(filename.as_slice()) || !readonly_flag {
+        if !self.is_allowed(&filename) || !readonly_flag {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -311,10 +314,13 @@ impl FilesystemHandler {
     }
 
     fn handle_stat_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
-        println!("stat called for {}", String::from_utf8_lossy(filename.as_slice()));
+        let filename_vec: Vec<u8> = process.get_reader()
+            .read_string(syscall.args[0], libc::PATH_MAX as usize)
+            .expect("Could not read filename from memory!");
+        let filename: OsString = OsString::from_vec(filename_vec);
+        println!("stat called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(filename.as_slice()) {
+        if !self.is_allowed(&filename) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -322,10 +328,13 @@ impl FilesystemHandler {
     }
 
     fn handle_lstat_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
-        println!("lstat called for {}", String::from_utf8_lossy(filename.as_slice()));
+        let filename_vec: Vec<u8> = process.get_reader()
+            .read_string(syscall.args[0], libc::PATH_MAX as usize)
+            .expect("Could not read filename from memory!");
+        let filename: OsString = OsString::from_vec(filename_vec);
+        println!("lstat called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(filename.as_slice()) {
+        if !self.is_allowed(&filename) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -333,10 +342,13 @@ impl FilesystemHandler {
     }
 
     fn handle_access_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
-        println!("access called for {}", String::from_utf8_lossy(filename.as_slice()));
+        let filename_vec: Vec<u8> = process.get_reader()
+            .read_string(syscall.args[0], libc::PATH_MAX as usize)
+            .expect("Could not read filename from memory!");
+        let filename: OsString = OsString::from_vec(filename_vec);
+        println!("access called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(filename.as_slice()) {
+        if !self.is_allowed(&filename) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -349,10 +361,13 @@ impl FilesystemHandler {
     }
 
     fn handle_readlink_entry(&self, process: &ProcessController, syscall: &mut ptrace::Syscall) -> Result<OkCode, ErrCode> {
-        let filename = process.get_reader().read_string(syscall.args[0], libc::PATH_MAX as usize).expect("Could not read filename from memory!");
-        println!("readlink called for {}", String::from_utf8_lossy(filename.as_slice()));
+        let filename_vec: Vec<u8> = process.get_reader()
+            .read_string(syscall.args[0], libc::PATH_MAX as usize)
+            .expect("Could not read filename from memory!");
+        let filename: OsString = OsString::from_vec(filename_vec);
+        println!("readlink called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(filename.as_slice()) && filename.as_slice() != b"/proc/self/exe" {
+        if !self.is_allowed(&filename) && filename.as_os_str().as_bytes() != b"/proc/self/exe" {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)

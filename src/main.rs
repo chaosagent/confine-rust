@@ -6,6 +6,8 @@ extern crate fnv;
 extern crate libc;
 extern crate nix;
 extern crate ptrace;
+#[macro_use] extern crate serde_derive;
+extern crate serde_json;
 #[macro_use] extern crate syscall;
 
 mod constants;
@@ -15,9 +17,62 @@ mod process;
 mod sandbox;
 mod syscall_handlers;
 
+use executors::Executor;
 use executors::execve::ExecveExecutor;
+use std::fs::File;
+
+#[derive(Serialize, Deserialize)]
+struct SandboxConfig {
+    cputime_limit: Option<u64>,
+    memory_limit: Option<u64>,
+
+    allowed_files: Option<Vec<String>>,
+    allowed_prefixes: Option<Vec<String>>,
+}
+
+impl SandboxConfig {
+    pub fn get_sandbox<T>(&self, executor: T) -> sandbox::Sandbox where T: Executor + 'static {
+        let mut sandbox = sandbox::Sandbox::new(box executor);
+        self.apply(&mut sandbox);
+        sandbox
+    }
+
+    pub fn apply(&self, sandbox: &mut sandbox::Sandbox) {
+        sandbox.add_syscall_handler(syscall_handlers::RWHandler::new(!0));
+        sandbox.add_syscall_handler(syscall_handlers::FDHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::MemoryHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::SignalsHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::ThreadingHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::SchedulingHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::RLimitsHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::ClockHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::UserInfoHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::SocketHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::MiscHandler::new());
+        sandbox.add_syscall_handler(syscall_handlers::DefaultHandler::new());
+
+        let mut fs_handler = syscall_handlers::FilesystemHandler::new_with_default_rules();
+        if let Some(ref allowed_files) = self.allowed_files {
+            fs_handler.allow_files(allowed_files.iter());
+        }
+        if let Some(ref allowed_prefixes) = self.allowed_prefixes {
+            fs_handler.allow_prefixes(allowed_prefixes.iter());
+        }
+        sandbox.add_syscall_handler(fs_handler);
+
+        if let Some(limit) = self.cputime_limit {
+            sandbox.add_rlimit(rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_CPU, limit));
+        }
+        if let Some(limit) = self.memory_limit {
+            sandbox.add_rlimit(rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_AS, limit));
+        }
+    }
+}
 
 fn main() {
+    let config_file: File = File::open("confine.json").expect("Could not find confine.json!");
+    let sandbox_config: SandboxConfig = serde_json::from_reader(config_file).expect("Failed to deserialize config!");
+
     let executor = ExecveExecutor::new(&[
         String::from("/usr/bin/java"),
         String::from("-XX:-UsePerfData"),
@@ -25,49 +80,6 @@ fn main() {
         String::from("/tmp"),
         String::from("lol")
     ]);
-    let rw_handler = box syscall_handlers::RWHandler::new(!0);
-    let fd_handler = box syscall_handlers::FDHandler::new();
-    let memory_handler = box syscall_handlers::MemoryHandler::new();
-    let mut fs_handler = box syscall_handlers::FilesystemHandler::new_with_default_rules();
-    fs_handler.allow_files(vec![
-        b".hotspotrc".to_vec(),
-        b".hotspot_compiler".to_vec(),
-        b"/etc/nsswitch.conf".to_vec(),
-        b"/etc/passwd".to_vec(),
-        b"/tmp".to_vec(),
-    ].into_iter());
-    fs_handler.allow_prefixes(vec![
-        b"/etc/java-7-openjdk/amd64".to_vec(),
-        b"/tmp/.java_pid".to_vec(),
-        b"/tmp/".to_vec(),
-    ].into_iter());
-    let signals_handler = box syscall_handlers::SignalsHandler::new();
-    let threading_handler = box syscall_handlers::ThreadingHandler::new();
-    let scheduling_handler = box syscall_handlers::SchedulingHandler::new();
-    let rlimits_handler = box syscall_handlers::RLimitsHandler::new();
-    let clock_handler = box syscall_handlers::ClockHandler::new();
-    let user_info_handler = box syscall_handlers::UserInfoHandler::new();
-    let socket_handler = box syscall_handlers::SocketHandler::new();
-    let misc_handler = box syscall_handlers::MiscHandler::new();
-    let default_syscall_handler = box syscall_handlers::DefaultHandler::new();
-    let handlers: Vec<Box<syscall_handlers::SyscallHandler>> = vec![
-        rw_handler,
-        fd_handler,
-        memory_handler,
-        fs_handler,
-        signals_handler,
-        threading_handler,
-        scheduling_handler,
-        rlimits_handler,
-        clock_handler,
-        user_info_handler,
-        socket_handler,
-        misc_handler,
-        default_syscall_handler,
-    ];
-    let rlimits: Vec<rlimits::RLimit64> = vec![
-        rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_CPU, 2),
-    ];
-    let mut sandbox = sandbox::Sandbox::new(box executor, handlers, rlimits);
+    let mut sandbox = sandbox_config.get_sandbox(executor);
     println!("{:?}", sandbox.start());
 }

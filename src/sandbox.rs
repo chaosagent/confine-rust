@@ -33,14 +33,13 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
-    pub fn new(executor: Box<executors::Executor>, syscall_handlers: Vec<Box<SyscallHandler>>,
-               rlimits: Vec<rlimits::RLimit64>) -> Sandbox {
+    pub fn new(executor: Box<executors::Executor>) -> Sandbox {
         Sandbox {
             executor: executor,
-            syscall_handlers: syscall_handlers,
+            syscall_handlers: Vec::new(),
             child_pid: -1,
 
-            rlimits: rlimits,
+            rlimits: Vec::new(),
 
             children: FnvHashMap::default(),
 
@@ -49,6 +48,14 @@ impl Sandbox {
             stderr_fd: None,
 
         }
+    }
+
+    pub fn add_syscall_handler<T>(&mut self, syscall_handler: T) where T : SyscallHandler + 'static {
+        self.syscall_handlers.push(box syscall_handler);
+    }
+
+    pub fn add_rlimit(&mut self, rlimit: rlimits::RLimit64) {
+        self.rlimits.push(rlimit);
     }
 
     pub fn stdin_redirect<T>(&mut self, fd: T) where T: IntoRawFd {
@@ -102,6 +109,39 @@ impl Sandbox {
                     ptrace_options |= ptrace::PTRACE_O_TRACECLONE;
                     ptrace::setoptions(self.child_pid, ptrace_options).expect("Failed to set ptrace options!");
                     ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
+                } else {
+                    self.kill_program().expect("Failed to kill child!");
+                    return Err(ErrCode::InternalError);
+                }
+            } else {
+                self.kill_program().expect("Failed to kill child!");
+                return Err(ErrCode::InternalError);
+            }
+        }
+
+        // Ignore RT_SIGPROCMASK from signal::raise
+        loop {
+            let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
+            println!("{:?}", status);
+            if let wait::WaitStatus::Stopped(pid, sig) = status {
+                assert_eq!(pid, self.child_pid);
+                if let signal::Signal::SIGTRAP = sig {
+                    let syscall = ptrace::Syscall::from_pid(self.child_pid).expect("Failed to get syscall");
+                    if syscall.call != nr::RT_SIGPROCMASK && syscall.call != NOP_SYSCALL {
+                        // Assume raise won't call RT_SIGPROCMASK
+                        // TODO: make more robust
+                        break;
+                    }
+
+                    let process = self.children.get_mut(&pid).unwrap();
+                    if !process.in_syscall {
+                        process.in_syscall = true;
+                        ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
+                    } else {
+                        process.in_syscall = false;
+                        ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
+                        break;
+                    }
                 } else {
                     self.kill_program().expect("Failed to kill child!");
                     return Err(ErrCode::InternalError);

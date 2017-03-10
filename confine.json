@@ -1,0 +1,16 @@
+{
+  "cputime_limit": 1,
+  "memory_limit": 2560000000,
+  "allowed_files": [
+    ".hotspotrc",
+    ".hotspot_compiler",
+    "/etc/nsswitch.conf",
+    "/etc/passwd",
+    "/tmp"
+  ],
+  "allowed_prefixes": [
+    "/etc/java-8-openjdk/",
+    "/tmp/.java_pid",
+    "/tmp/"
+  ]
+}
