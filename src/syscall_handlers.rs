@@ -18,7 +18,8 @@ pub enum OkCode {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", content = "value")]
 pub enum ErrCode {
     InternalError,
 

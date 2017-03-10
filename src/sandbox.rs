@@ -9,7 +9,9 @@ use nix::unistd;
 use process::{Process, ProcessController};
 use ptrace;
 use rlimits;
+use serde_json;
 use std::collections::HashMap;
+use std::io::Write;
 use std::mem;
 use std::os::unix::io::{IntoRawFd, RawFd};
 use syscall::nr;
@@ -30,6 +32,9 @@ pub struct Sandbox {
     stdin_fd: Option<RawFd>,
     stdout_fd: Option<RawFd>,
     stderr_fd: Option<RawFd>,
+
+    execution_report: Option<ExecutionReport>,
+    report_writer: Option<Box<Write>>,
 }
 
 impl Sandbox {
@@ -47,6 +52,8 @@ impl Sandbox {
             stdout_fd: None,
             stderr_fd: None,
 
+            execution_report: None,
+            report_writer: None,
         }
     }
 
@@ -70,6 +77,10 @@ impl Sandbox {
         self.stderr_fd = Some(fd.into_raw_fd());
     }
 
+    pub fn set_report_writer<T>(&mut self, writer: T) where T: Write + 'static {
+        self.report_writer = Some(box writer);
+    }
+
     pub fn start(&mut self) -> Result<(), ErrCode> {
         match unistd::fork() {
             Ok(fork_result) => match fork_result {
@@ -78,6 +89,7 @@ impl Sandbox {
                     self.child_pid = child;
                     self.children.insert(child, Process::new(child));
                     let result = self.monitor();
+                    self.write_report();
                     self.print_usage_statistics();
                     result
                 },
@@ -96,8 +108,6 @@ impl Sandbox {
     // TODO: Don't panic in the monitor; process errors instead.
     // TODO: Handle non-PTRACE_EVENT sources of SIGTRAPs, distinguishing with PTRACE_O_TRACESYSGOOD.
     fn monitor(&mut self) -> Result<(), ErrCode> {
-        let mut result = Ok(());
-
         // Wait for initial SIGSTOP after PTRACE_TRACEME and set options.
         {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
@@ -159,31 +169,39 @@ impl Sandbox {
             match status {
                 wait::WaitStatus::Exited(_, code) => {
                     println!("Exited with code {}", code);
-                    break;
+                    let result = Ok(());
+                    self.build_execution_report(result);
+                    return result;
                 },
                 wait::WaitStatus::Signaled(_, signal, _) => {
                     println!("Received signal {}", signal as i32);
+
+                    let result = Err(ErrCode::RuntimeError);
+                    self.build_execution_report(result);
                     self.kill_program().expect("Failed to kill child!");  // TODO: Process inbound signals
-                    break;
+                    return result;
                 }
                 wait::WaitStatus::Stopped(pid, sig) => {
                     match sig {
                         signal::Signal::SIGTRAP => { // syscall
                             if let Err(code) = self.process_syscall(pid) {
+                                let result = Err(code);
+                                self.build_execution_report(result);
                                 self.kill_program().expect("Failed to kill child!");
-                                result = Err(code);
-                                break;
+                                return result;
                             }
                         },
                         signal::Signal::SIGSEGV => {
-                            result = Err(ErrCode::RuntimeError);
+                            let result = Err(ErrCode::RuntimeError);
+                            self.build_execution_report(result);
                             self.kill_program().expect("Failed to kill child!");
-                            break;
+                            return result;
                         }
                         signal::Signal::SIGXCPU => {
-                            result = Err(ErrCode::TimeLimitExceeded);
+                            let result = Err(ErrCode::TimeLimitExceeded);
+                            self.build_execution_report(result);
                             self.kill_program().expect("Failed to kill child!");
-                            break;
+                            return result;
                         }
                         _ => ()
                     }
@@ -204,6 +222,9 @@ impl Sandbox {
                 _ => unreachable!()
             }
         }
+        let result = Err(ErrCode::InternalError);
+        self.build_execution_report(result);
+        drop(self.kill_program());
         result
     }
 
@@ -318,6 +339,22 @@ impl Sandbox {
         }
     }
 
+    fn build_execution_report(&mut self, result: Result<(), ErrCode>) {
+        let usage = get_children_rusage().expect("Could not get usage statistics!");
+        self.execution_report = Some(ExecutionReport::build(result, usage));
+    }
+
+    fn write_report(&mut self) {
+        let report = match self.execution_report {
+            Some(ref execution_report) => serde_json::to_string(execution_report),
+            None => serde_json::to_string(&ExecutionReport::error())
+        }.unwrap();
+        println!("{}", report);
+        if let Some(ref mut report_writer) = self.report_writer {
+            report_writer.write_all(report.into_bytes().as_slice());
+        }
+    }
+
     // TODO: Measure rusage before killing child process to allow for measurement of killed children
     fn print_usage_statistics(&self) {
         let usage = get_children_rusage().expect("Could not get usage statistics!");
@@ -354,6 +391,44 @@ impl Sandbox {
             unistd::dup2(stderr_fd, STDERR).map_err(drop)?;
         }
         Ok(())
+    }
+}
+
+// TODO: properly support timevals
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExecutionReport {
+    execution_ok: bool,
+    execution_error_code: Option<ErrCode>,
+    exitcode: i8,
+
+    cputime: f64,
+    systemtime: f64,
+    memory: u64,
+}
+
+impl ExecutionReport {
+    pub fn error() -> ExecutionReport {
+        ExecutionReport {
+            execution_ok: false,
+            execution_error_code: Some(ErrCode::InternalError),
+            exitcode: -1i8, // TODO: get exitcode
+
+            cputime: 0f64,
+            systemtime: 0f64,
+            memory: 0u64,
+        }
+    }
+
+    pub fn build(execution_result: Result<(), ErrCode>, usage: libc::rusage) -> ExecutionReport {
+        ExecutionReport {
+            execution_ok: execution_result.is_ok(),
+            execution_error_code: execution_result.err(),
+            exitcode: 0, // TODO: get exitcode
+
+            cputime: usage.ru_utime.tv_sec as f64 + (usage.ru_utime.tv_usec as f64) / 1000000f64,
+            systemtime: usage.ru_stime.tv_sec as f64 + (usage.ru_stime.tv_usec as f64) / 1000000f64,
+            memory: usage.ru_maxrss as u64,
+        }
     }
 }
 

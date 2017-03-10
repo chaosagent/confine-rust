@@ -34,6 +34,8 @@ struct SandboxConfig {
     stdin_file: Option<String>,
     stdout_file: Option<String>,
     stderr_file: Option<String>,
+
+    json_report_file: Option<String>,
 }
 
 impl SandboxConfig {
@@ -48,6 +50,8 @@ impl SandboxConfig {
             stdin_file: None,
             stdout_file: None,
             stderr_file: None,
+
+            json_report_file: None,
         }
     }
 
@@ -91,10 +95,14 @@ impl SandboxConfig {
             sandbox.stdin_redirect(File::open(stdin_file).expect("Cannot open stdin file!"));
         }
         if let Some(ref stdout_file) = self.stdout_file {
-            sandbox.stdout_redirect(File::create(stdout_file).expect("Cannot open stdout file!"));
+            sandbox.stdout_redirect(File::create(stdout_file).expect("Cannot create stdout file!"));
         }
         if let Some(ref stderr_file) = self.stderr_file {
-            sandbox.stderr_redirect(File::create(stderr_file).expect("Cannot open stderr file!"));
+            sandbox.stderr_redirect(File::create(stderr_file).expect("Cannot create stderr file!"));
+        }
+
+        if let Some(ref json_report_file) = self.json_report_file {
+            sandbox.set_report_writer(File::create(json_report_file).expect("Cannot create JSON report file!"));
         }
     }
 }

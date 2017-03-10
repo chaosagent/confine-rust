@@ -12,5 +12,6 @@
     "/tmp/.java_pid",
     "/tmp/"
   ],
-  "stdout_file": "/tmp/lolll"
+  "stdout_file": "/tmp/lolll",
+  "json_report_file": "/tmp/report"
 }
