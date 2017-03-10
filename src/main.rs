@@ -97,6 +97,9 @@ fn main() {
         String::from("lol")
     ]);
     let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        panic!("No command specified!");
+    }
     let executor = ExecveExecutor::new(&args[1..]);
     let mut sandbox = sandbox_config.get_sandbox(executor);
     println!("{:?}", sandbox.start());
