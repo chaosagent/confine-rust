@@ -20,13 +20,15 @@ mod syscall_handlers;
 use executors::Executor;
 use executors::execve::ExecveExecutor;
 use std::env;
-use std::os::unix::io::AsRawFd;
 use std::fs::File;
+use std::os::unix::io::AsRawFd;
+use std::time::Duration;
 
 #[derive(Serialize, Deserialize)]
 struct SandboxConfig {
-    cputime_limit: Option<u64>,
-    memory_limit: Option<u64>,
+    realtime_limit: Option<u64>, // Milliseconds
+    cputime_limit: Option<u64>, // Seconds
+    memory_limit: Option<u64>, // KB
 
     allowed_files: Option<Vec<String>>,
     allowed_prefixes: Option<Vec<String>>,
@@ -42,6 +44,7 @@ impl SandboxConfig {
     pub fn new() -> SandboxConfig {
         SandboxConfig {
             cputime_limit: None,
+            realtime_limit: None,
             memory_limit: None,
 
             allowed_files: None,
@@ -84,11 +87,14 @@ impl SandboxConfig {
         }
         sandbox.add_syscall_handler(fs_handler);
 
+        if let Some(limit) = self.realtime_limit {
+            sandbox.set_realtime_limit(Duration::from_millis(limit));
+        }
         if let Some(limit) = self.cputime_limit {
             sandbox.add_rlimit(rlimits::RLimit64::new_offsetted(rlimits::Resource::RLIMIT_CPU, limit));
         }
         if let Some(limit) = self.memory_limit {
-            sandbox.add_rlimit(rlimits::RLimit64::new(rlimits::Resource::RLIMIT_AS, limit, limit));
+            sandbox.add_rlimit(rlimits::RLimit64::new(rlimits::Resource::RLIMIT_AS, limit * 1000, limit * 1000));
         }
 
         if let Some(ref stdin_file) = self.stdin_file {

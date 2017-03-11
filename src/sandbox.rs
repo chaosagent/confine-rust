@@ -11,9 +11,11 @@ use ptrace;
 use rlimits;
 use serde_json;
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{stdout, Write};
 use std::mem;
 use std::os::unix::io::{IntoRawFd, RawFd};
+use std::thread;
+use std::time::{Duration, Instant};
 use syscall::nr;
 use syscall_handlers::ErrCode;
 use syscall_handlers::OkCode;
@@ -24,10 +26,12 @@ pub struct Sandbox {
     syscall_handlers: Vec<Box<SyscallHandler>>,
     child_pid: libc::pid_t,
 
-    rlimits: Vec<rlimits::RLimit64>,
-
     // TODO: Handle PTRACE_EVENTs interrupting syscalls
     children: FnvHashMap<libc::pid_t, Process>,
+    start_instant: Option<Instant>,
+
+    rlimits: Vec<rlimits::RLimit64>,
+    realtime_limit: Option<Duration>,
 
     stdin_fd: Option<RawFd>,
     stdout_fd: Option<RawFd>,
@@ -44,9 +48,11 @@ impl Sandbox {
             syscall_handlers: Vec::new(),
             child_pid: -1,
 
-            rlimits: Vec::new(),
-
             children: FnvHashMap::default(),
+            start_instant: None,
+
+            rlimits: Vec::new(),
+            realtime_limit: None,
 
             stdin_fd: None,
             stdout_fd: None,
@@ -63,6 +69,10 @@ impl Sandbox {
 
     pub fn add_rlimit(&mut self, rlimit: rlimits::RLimit64) {
         self.rlimits.push(rlimit);
+    }
+
+    pub fn set_realtime_limit(&mut self, time: Duration) {
+        self.realtime_limit = Some(time);
     }
 
     pub fn stdin_redirect<T>(&mut self, fd: T) where T: IntoRawFd {
@@ -90,7 +100,6 @@ impl Sandbox {
                     self.children.insert(child, Process::new(child));
                     let result = self.monitor();
                     self.write_report();
-                    self.print_usage_statistics();
                     result
                 },
                 unistd::ForkResult::Child => {
@@ -118,6 +127,7 @@ impl Sandbox {
                     ptrace_options |= ptrace::PTRACE_O_EXITKILL;
                     ptrace_options |= ptrace::PTRACE_O_TRACECLONE;
                     ptrace::setoptions(self.child_pid, ptrace_options).expect("Failed to set ptrace options!");
+                    self.start_instant = Some(Instant::now());
                     ptrace::cont_syscall(self.child_pid, None).expect("Failed to continue!");
                 } else {
                     self.kill_program().expect("Failed to kill child!");
@@ -160,6 +170,15 @@ impl Sandbox {
                 self.kill_program().expect("Failed to kill child!");
                 return Err(ErrCode::InternalError);
             }
+        }
+
+        if let Some(duration) = self.realtime_limit {
+            let cloned_duration = duration.clone();
+            let child_pid = self.child_pid;
+            thread::spawn(move || {
+                thread::sleep(cloned_duration);
+                signal::kill(child_pid, signal::Signal::SIGXCPU);
+            });
         }
 
         loop {
@@ -339,27 +358,30 @@ impl Sandbox {
         }
     }
 
+    fn duration_since_start(&self) -> Duration {
+        Instant::now().duration_since(self.start_instant.unwrap_or(Instant::now()))
+    }
+
     fn build_execution_report(&mut self, result: Result<(), ErrCode>) {
         let usage = get_children_rusage().expect("Could not get usage statistics!");
-        self.execution_report = Some(ExecutionReport::build(result, usage));
+        self.execution_report = Some(ExecutionReport::build(result, usage, self.duration_since_start()));
     }
 
     fn write_report(&mut self) {
         let report = match self.execution_report {
-            Some(ref execution_report) => serde_json::to_string(execution_report),
-            None => serde_json::to_string(&ExecutionReport::error())
+            Some(ref execution_report) => {
+                execution_report.write(&mut stdout());
+                serde_json::to_string(execution_report)
+            },
+            None => {
+                let execution_report = ExecutionReport::error();
+                execution_report.write(&mut stdout());
+                serde_json::to_string(&execution_report)
+            }
         }.unwrap();
-        println!("{}", report);
         if let Some(ref mut report_writer) = self.report_writer {
             report_writer.write_all(report.into_bytes().as_slice());
         }
-    }
-
-    // TODO: Measure rusage before killing child process to allow for measurement of killed children
-    fn print_usage_statistics(&self) {
-        let usage = get_children_rusage().expect("Could not get usage statistics!");
-        println!("User Time: {}.{:06}s", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
-        println!("System Time: {}.{:06}s", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
     }
 }
 
@@ -401,6 +423,7 @@ pub struct ExecutionReport {
     execution_error_code: Option<ErrCode>,
     exitcode: i8,
 
+    realtime: f64,
     cputime: f64,
     systemtime: f64,
     memory: u64,
@@ -413,22 +436,31 @@ impl ExecutionReport {
             execution_error_code: Some(ErrCode::InternalError),
             exitcode: -1i8, // TODO: get exitcode
 
+            realtime: 0f64,
             cputime: 0f64,
             systemtime: 0f64,
             memory: 0u64,
         }
     }
 
-    pub fn build(execution_result: Result<(), ErrCode>, usage: libc::rusage) -> ExecutionReport {
+    pub fn build(execution_result: Result<(), ErrCode>, usage: libc::rusage, realtime: Duration) -> ExecutionReport {
         ExecutionReport {
             execution_ok: execution_result.is_ok(),
             execution_error_code: execution_result.err(),
             exitcode: 0, // TODO: get exitcode
 
+            realtime: realtime.as_secs() as f64 + (realtime.subsec_nanos() as f64) / 1000000000f64,
             cputime: usage.ru_utime.tv_sec as f64 + (usage.ru_utime.tv_usec as f64) / 1000000f64,
             systemtime: usage.ru_stime.tv_sec as f64 + (usage.ru_stime.tv_usec as f64) / 1000000f64,
             memory: usage.ru_maxrss as u64,
         }
+    }
+
+    pub fn write<T>(&self, writer: &mut T) where T: Write {
+        writeln!(writer, "Real Time: {:.6}s", self.realtime);
+        writeln!(writer, "User Time: {:.6}s", self.cputime);
+        writeln!(writer, "System Time: {:.6}s", self.systemtime);
+        writeln!(writer, "Memory: {}KB", self.memory / 1000);
     }
 }
 
