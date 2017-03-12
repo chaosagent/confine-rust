@@ -1,6 +1,6 @@
 {
   "cputime_limit": 2,
-  "realtime_limit": 2,
+  "realtime_limit": 2000,
   "allowed_files": [
     ".hotspotrc",
     ".hotspot_compiler",

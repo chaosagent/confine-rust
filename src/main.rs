@@ -2,8 +2,10 @@
 #![feature(conservative_impl_trait)]
 #![feature(custom_derive)]
 
+extern crate clap;
 extern crate fnv;
 extern crate libc;
+#[macro_use] extern crate log;
 extern crate nix;
 extern crate ptrace;
 #[macro_use] extern crate serde_derive;
@@ -17,12 +19,29 @@ mod process;
 mod sandbox;
 mod syscall_handlers;
 
+use clap::{Arg, App, SubCommand};
 use executors::Executor;
 use executors::execve::ExecveExecutor;
+use log::{LogRecord, LogLevel, LogLevelFilter, LogMetadata};
 use std::env;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::time::Duration;
+
+
+struct Logger;
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &LogMetadata) -> bool {
+        metadata.level() <= LogLevel::Warn
+    }
+
+    fn log(&self, record: &LogRecord) {
+        if self.enabled(record.metadata()) {
+            println!("{} - {}", record.level(), record.args());
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct SandboxConfig {
@@ -114,15 +133,38 @@ impl SandboxConfig {
 }
 
 fn main() {
-    let sandbox_config: SandboxConfig = match File::open("confine.json") {
-        Ok(config_file) => serde_json::from_reader(config_file).expect("Failed to deserialize config!"),
-        _ => SandboxConfig::new()
+    log::set_logger(|max_log_level| {
+        max_log_level.set(LogLevelFilter::Warn);
+        Box::new(Logger)
+    }).expect("Failed to set up logger!");
+
+    let matches = App::new("My Super Program")
+        .version("1.0")
+        .author("Kevin K. <kbknapp@gmail.com>")
+        .about("Does awesome things")
+        .arg(Arg::with_name("config")
+            .short("c")
+            .long("config")
+            .value_name("FILE")
+            .help("Sets a custom config file")
+            .takes_value(true))
+        .arg(Arg::with_name("command")
+            .required(true)
+            .multiple(true)
+            .takes_value(true))
+        .get_matches();
+
+    let sandbox_config: SandboxConfig = match matches.value_of("config") {
+        Some(config_file_path) => {
+            match File::open(config_file_path) {
+                Ok(config_file) => serde_json::from_reader(config_file).expect("Failed to deserialize config!"),
+                _ => panic!("Could not open sandbox config file!")
+            }
+        },
+        None => SandboxConfig::new()
     };
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        panic!("No command specified!");
-    }
+    let args: Vec<&str> = matches.values_of("command").unwrap().collect();
 
     /*let executor = ExecveExecutor::new(&[
         String::from("/usr/bin/java"),
@@ -135,7 +177,7 @@ fn main() {
         String::from("lol")
     ]);*/
 
-    let executor = ExecveExecutor::new(&args[1..]);
+    let executor = ExecveExecutor::new(args.as_slice());
     let mut sandbox = sandbox_config.get_sandbox(executor);
-    println!("{:?}", sandbox.start());
+    info!("{:?}", sandbox.start());
 }

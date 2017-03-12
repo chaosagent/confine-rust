@@ -284,7 +284,7 @@ impl FilesystemHandler {
             _ => filename.to_os_string()
         };
 
-        println!("Canonicalized filename: {}", canonical_filename.to_string_lossy());
+        info!("Canonicalized filename: {}", canonical_filename.to_string_lossy());
 
         if self.allowed_files.contains(&canonical_filename) {
             return true;
@@ -304,7 +304,7 @@ impl FilesystemHandler {
             .read_string(syscall.args[0], libc::PATH_MAX as usize)
             .expect("Could not read filename from memory!");
         let filename: OsString = OsString::from_vec(filename_vec);
-        println!("open called for {}", filename.to_string_lossy());
+        info!("open called for {}", filename.to_string_lossy());
 
         let readonly_flag = syscall.args[1] & 3 == libc::O_RDONLY as usize;
         if !self.is_allowed(&filename) || !readonly_flag {
@@ -319,7 +319,7 @@ impl FilesystemHandler {
             .read_string(syscall.args[0], libc::PATH_MAX as usize)
             .expect("Could not read filename from memory!");
         let filename: OsString = OsString::from_vec(filename_vec);
-        println!("stat called for {}", filename.to_string_lossy());
+        info!("stat called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(&filename) {
             Err(ErrCode::IllegalOpen)
@@ -333,7 +333,7 @@ impl FilesystemHandler {
             .read_string(syscall.args[0], libc::PATH_MAX as usize)
             .expect("Could not read filename from memory!");
         let filename: OsString = OsString::from_vec(filename_vec);
-        println!("lstat called for {}", filename.to_string_lossy());
+        info!("lstat called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(&filename) {
             Err(ErrCode::IllegalOpen)
@@ -347,7 +347,7 @@ impl FilesystemHandler {
             .read_string(syscall.args[0], libc::PATH_MAX as usize)
             .expect("Could not read filename from memory!");
         let filename: OsString = OsString::from_vec(filename_vec);
-        println!("access called for {}", filename.to_string_lossy());
+        info!("access called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(&filename) {
             Err(ErrCode::IllegalOpen)
@@ -366,7 +366,7 @@ impl FilesystemHandler {
             .read_string(syscall.args[0], libc::PATH_MAX as usize)
             .expect("Could not read filename from memory!");
         let filename: OsString = OsString::from_vec(filename_vec);
-        println!("readlink called for {}", filename.to_string_lossy());
+        info!("readlink called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(&filename) && filename.as_os_str().as_bytes() != b"/proc/self/exe" {
             Err(ErrCode::IllegalOpen)
@@ -658,9 +658,10 @@ impl MiscHandler {
 
 impl SyscallHandler for MiscHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 2] = [
+        static SYSCALL_WHITELIST: [usize; 3] = [
             nr::SYSINFO,
             nr::UNAME,
+            nr::GETRANDOM,
         ];
         &SYSCALL_WHITELIST
     }

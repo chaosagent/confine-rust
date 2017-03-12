@@ -12,9 +12,9 @@ pub struct ExecveExecutor {
 }
 
 impl ExecveExecutor {
-    pub fn new(args: &[String]) -> ExecveExecutor {
+    pub fn new(args: &[&str]) -> ExecveExecutor {
         ExecveExecutor {
-            args: args.iter().map(|s| CString::new(&s as &str).unwrap()).collect(),
+            args: args.iter().map(|s| CString::new(*s).unwrap()).collect(),
         }
     }
 }

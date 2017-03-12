@@ -2,6 +2,7 @@ use constants::*;
 use executors;
 use fnv::FnvHashMap;
 use libc;
+use log::LogLevel;
 use nix::errno;
 use nix::sys::signal;
 use nix::sys::wait;
@@ -11,7 +12,7 @@ use ptrace;
 use rlimits;
 use serde_json;
 use std::collections::HashMap;
-use std::io::{stdout, Write};
+use std::io::{stderr, Write};
 use std::mem;
 use std::os::unix::io::{IntoRawFd, RawFd};
 use std::thread;
@@ -95,7 +96,7 @@ impl Sandbox {
         match unistd::fork() {
             Ok(fork_result) => match fork_result {
                 unistd::ForkResult::Parent { child } => {
-                    println!("pid: {}", child);
+                    info!("pid: {}", child);
                     self.child_pid = child;
                     self.children.insert(child, Process::new(child));
                     let result = self.monitor();
@@ -122,7 +123,7 @@ impl Sandbox {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
             if let wait::WaitStatus::Stopped(_, sig) = status {
                 if let signal::Signal::SIGSTOP = sig {
-                    println!("Got initial SIGSTOP, commencing with execution.");
+                    info!("Got initial SIGSTOP, commencing with execution.");
                     let mut ptrace_options = 0;
                     ptrace_options |= ptrace::PTRACE_O_EXITKILL;
                     ptrace_options |= ptrace::PTRACE_O_TRACECLONE;
@@ -142,7 +143,7 @@ impl Sandbox {
         // Ignore RT_SIGPROCMASK from signal::raise
         loop {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
-            println!("{:?}", status);
+            info!("{:?}", status);
             if let wait::WaitStatus::Stopped(pid, sig) = status {
                 assert_eq!(pid, self.child_pid);
                 if let signal::Signal::SIGTRAP = sig {
@@ -183,17 +184,17 @@ impl Sandbox {
 
         loop {
             let status = wait::waitpid(-1, None).expect("Failed to wait");
-            println!("{:?}", status);
+            info!("{:?}", status);
 
             match status {
                 wait::WaitStatus::Exited(_, code) => {
-                    println!("Exited with code {}", code);
+                    info!("Exited with code {}", code);
                     let result = Ok(());
                     self.build_execution_report(result);
                     return result;
                 },
                 wait::WaitStatus::Signaled(_, signal, _) => {
-                    println!("Received signal {}", signal as i32);
+                    info!("Received signal {}", signal as i32);
 
                     let result = Err(ErrCode::RuntimeError);
                     self.build_execution_report(result);
@@ -266,7 +267,7 @@ impl Sandbox {
         };
 
         if !in_syscall {
-            println!("Syscall entry for pid {}: {:?}", pid, syscall);
+            info!("Syscall entry for pid {}: {:?}", pid, syscall);
 
             // Syscall entries always have a return_val of -ENOSYS
             if syscall.return_val == -libc::ENOSYS as isize {
@@ -280,13 +281,13 @@ impl Sandbox {
             } else {
                 // This can happen if a syscall exit notifies both a parent and a child in execve
                 if syscall.call != nr::EXECVE {
-                    println!("Syscall entry without return_val of -ENOSYS detected, and is not execve!");
+                    error!("Syscall entry without return_val of -ENOSYS detected, and is not execve!");
                     return Err(ErrCode::InternalError);
                 }
                 // If it is execve, we're OK
             }
         } else {
-            println!("Syscall exit for pid {}: {:?}", pid, syscall);
+            info!("Syscall exit for pid {}: {:?}", pid, syscall);
 
             match self.process_syscall_exit(&controller, &mut syscall) {
                 Err(code) => {
@@ -330,7 +331,7 @@ impl Sandbox {
             .map(|handler| handler.get_syscall_whitelist())
             .map(|whitelist| whitelist.contains(&syscall.call))
             .any(|x| x) {
-            // println!("ILLEGAL {}", syscall.call);
+            // warn!("ILLEGAL {}", syscall.call);
             // return Ok(());
             return Err(ErrCode::IllegalSyscall(syscall.call))
         }
@@ -350,7 +351,7 @@ impl Sandbox {
             Ok(_) => Ok(()),
             Err(code) => {
                 /*if let ErrCode::IllegalSyscall(call) = code {
-                    println!("ILLEGAL {}", call);
+                    warn!("ILLEGAL {}", call);
                 }
                 Ok(()) */
                 Err(code)
@@ -370,12 +371,16 @@ impl Sandbox {
     fn write_report(&mut self) {
         let report = match self.execution_report {
             Some(ref execution_report) => {
-                execution_report.write(&mut stdout());
+                if log_enabled!(LogLevel::Info) {
+                    execution_report.write(&mut stderr());
+                }
                 serde_json::to_string(execution_report)
             },
             None => {
                 let execution_report = ExecutionReport::error();
-                execution_report.write(&mut stdout());
+                if log_enabled!(LogLevel::Info) {
+                    execution_report.write(&mut stderr());
+                }
                 serde_json::to_string(&execution_report)
             }
         }.unwrap();

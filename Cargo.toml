@@ -4,7 +4,9 @@ version = "0.1.0"
 authors = ["David Hou <david.hou314@gmail.com>"]
 
 [dependencies]
+clap = "2.21.1"
 libc = "0.2.21"
+log = "0.3.7"
 fnv = "1.0.5"
 nix = { git = "https://github.com/chaosagent/nix", rev = "34acfdd" }
 ptrace = { git = "https://github.com/chaosagent/rust-ptrace", rev = "1e75a88" }
