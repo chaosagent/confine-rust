@@ -25,7 +25,6 @@ pub enum ErrCode {
 
     RuntimeError,
     IllegalSyscall(usize),
-    IllegalRead,
     IllegalWrite,
     IllegalOpen,
 
