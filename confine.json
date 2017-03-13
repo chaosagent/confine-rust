@@ -11,7 +11,8 @@
   "allowed_prefixes": [
     "/etc/java-7-openjdk/",
     "/tmp/.java_pid",
-    "/tmp/"
+    "/tmp/",
+    "/proc"
   ],
   "stdout_file": "/tmp/lolll",
   "json_report_file": "/tmp/report"

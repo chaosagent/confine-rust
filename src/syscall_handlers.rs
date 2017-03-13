@@ -250,7 +250,6 @@ impl FilesystemHandler {
         ].into_iter());
         handler.allow_prefixes(vec![
             "/lib/",
-            "/proc/",
             "/usr/",
             "/sys/devices/system/cpu/",
         ].into_iter());
