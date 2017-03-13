@@ -179,5 +179,6 @@ fn main() {
 
     let executor = ExecveExecutor::new(args.as_slice());
     let mut sandbox = sandbox_config.get_sandbox(executor);
-    info!("{:?}", sandbox.start());
+    let result = sandbox.start();
+    info!("{:?}", result);
 }
