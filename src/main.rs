@@ -138,10 +138,10 @@ fn main() {
         Box::new(Logger)
     }).expect("Failed to set up logger!");
 
-    let matches = App::new("My Super Program")
-        .version("1.0")
-        .author("Kevin K. <kbknapp@gmail.com>")
-        .about("Does awesome things")
+    let matches = App::new("Confine")
+        .version("0.0.1")
+        .author("David Hou <david.hou314@gmail.com")
+        .about("Sandboxes program system calls with ptrace.")
         .arg(Arg::with_name("config")
             .short("c")
             .long("config")
@@ -165,6 +165,8 @@ fn main() {
     };
 
     let args: Vec<&str> = matches.values_of("command").unwrap().collect();
+
+    info!("Program arguments: {:?}", args);
 
     /*let executor = ExecveExecutor::new(&[
         String::from("/usr/bin/java"),
