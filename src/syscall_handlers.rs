@@ -569,7 +569,8 @@ impl ClockHandler {
 
 impl SyscallHandler for ClockHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 2] = [
+        static SYSCALL_WHITELIST: [usize; 3] = [
+            nr::GETTIMEOFDAY,
             nr::CLOCK_GETTIME,
             nr::CLOCK_GETRES,
         ];
