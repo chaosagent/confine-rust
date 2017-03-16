@@ -277,10 +277,10 @@ impl FilesystemHandler {
     }
 
     // TODO: account for working directory if working directory of child process is ever changed.
-    fn is_allowed(&self, filename: &OsStr) -> bool {
+    fn is_allowed(&self, process: &ProcessController, filename: &OsStr) -> bool {
         let canonical_filename: OsString = match fs::canonicalize(&OsStr::from_bytes(filename.as_bytes())) {
             Ok(buf) => buf.into_os_string(),
-            _ => filename.to_os_string()
+            _ => return true
         };
 
         info!("Canonicalized filename: {}", canonical_filename.to_string_lossy());
@@ -295,6 +295,13 @@ impl FilesystemHandler {
             return true;
         }
 
+        // Check if the file is a /proc/self
+        if let Some(s) = filename.to_str() {
+            if s.starts_with("/proc/self/") && !s.contains("..") {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -306,7 +313,7 @@ impl FilesystemHandler {
         info!("open called for {}", filename.to_string_lossy());
 
         let readonly_flag = syscall.args[1] & 3 == libc::O_RDONLY as usize;
-        if !self.is_allowed(&filename) || !readonly_flag {
+        if !self.is_allowed(process, &filename) || !readonly_flag {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -320,7 +327,7 @@ impl FilesystemHandler {
         let filename: OsString = OsString::from_vec(filename_vec);
         info!("stat called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(&filename) {
+        if !self.is_allowed(process, &filename) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -334,7 +341,7 @@ impl FilesystemHandler {
         let filename: OsString = OsString::from_vec(filename_vec);
         info!("lstat called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(&filename) {
+        if !self.is_allowed(process, &filename) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -348,7 +355,7 @@ impl FilesystemHandler {
         let filename: OsString = OsString::from_vec(filename_vec);
         info!("access called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(&filename) {
+        if !self.is_allowed(process, &filename) {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -367,7 +374,7 @@ impl FilesystemHandler {
         let filename: OsString = OsString::from_vec(filename_vec);
         info!("readlink called for {}", filename.to_string_lossy());
 
-        if !self.is_allowed(&filename) && filename.as_os_str().as_bytes() != b"/proc/self/exe" {
+        if !self.is_allowed(process, &filename) && filename.as_os_str().as_bytes() != b"/proc/self/exe" {
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -562,7 +569,8 @@ impl ClockHandler {
 
 impl SyscallHandler for ClockHandler {
     fn get_syscall_whitelist(&self) -> &'static [usize] {
-        static SYSCALL_WHITELIST: [usize; 1] = [
+        static SYSCALL_WHITELIST: [usize; 2] = [
+            nr::CLOCK_GETTIME,
             nr::CLOCK_GETRES,
         ];
         &SYSCALL_WHITELIST

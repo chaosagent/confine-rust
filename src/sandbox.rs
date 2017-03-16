@@ -189,7 +189,11 @@ impl Sandbox {
             match status {
                 wait::WaitStatus::Exited(_, code) => {
                     info!("Exited with code {}", code);
-                    let result = Ok(());
+                    let result = if code == 0 {
+                        Ok(())
+                    } else {
+                        Err(ErrCode::RuntimeError)
+                    };
                     self.build_execution_report(result);
                     return result;
                 },
