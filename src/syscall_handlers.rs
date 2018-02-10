@@ -242,16 +242,18 @@ impl FilesystemHandler {
     pub fn new_with_default_rules() -> FilesystemHandler {
         let mut handler = FilesystemHandler::new();
         handler.allow_files(vec![
+            "/dev/null",
             "/etc/ld.so.cache",
             "/etc/ld.so.preload",
             "/etc/ld.so.nohwcap",
-            "/usr",
             "/sys/devices/system/cpu",
+            "/usr",
         ].into_iter());
         handler.allow_prefixes(vec![
             "/lib/",
-            "/usr/",
+            "/proc",
             "/sys/devices/system/cpu/",
+            "/usr/",
         ].into_iter());
         handler
     }
@@ -314,6 +316,7 @@ impl FilesystemHandler {
 
         let readonly_flag = syscall.args[1] & 3 == libc::O_RDONLY as usize;
         if !self.is_allowed(process, &filename) || !readonly_flag {
+            warn!("Detected illegal open of {}", filename.to_string_lossy());
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -328,6 +331,7 @@ impl FilesystemHandler {
         info!("stat called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(process, &filename) {
+            warn!("Detected illegal stat of {}", filename.to_string_lossy());
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -342,6 +346,7 @@ impl FilesystemHandler {
         info!("lstat called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(process, &filename) {
+            warn!("Detected illegal lstat of {}", filename.to_string_lossy());
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)
@@ -356,6 +361,7 @@ impl FilesystemHandler {
         info!("access called for {}", filename.to_string_lossy());
 
         if !self.is_allowed(process, &filename) {
+            warn!("Detected illegal access of {}", filename.to_string_lossy());
             Err(ErrCode::IllegalOpen)
         } else {
             Ok(OkCode::Ok)

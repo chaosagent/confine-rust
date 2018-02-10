@@ -141,7 +141,7 @@ impl Sandbox {
         }
 
         // Ignore RT_SIGPROCMASK from signal::raise
-        loop {
+        /*loop {
             let status = wait::waitpid(self.child_pid, None).expect("Failed to wait");
             info!("{:?}", status);
             if let wait::WaitStatus::Stopped(pid, sig) = status {
@@ -171,7 +171,7 @@ impl Sandbox {
                 self.kill_program().expect("Failed to kill child!");
                 return Err(ErrCode::InternalError);
             }
-        }
+        }*/
 
         if let Some(duration) = self.realtime_limit {
             let cloned_duration = duration.clone();
